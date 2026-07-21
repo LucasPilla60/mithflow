@@ -399,6 +399,21 @@ verifica nada. El catálogo **no** incluye `Q8_0` ni `Q6_K` a propósito: una
 entrada sin su hash medido sería un agujero, y ninguno de los dos es alcanzable
 por la tabla de decisión.
 
+### Estado del Plan 2
+
+| Módulo | Estado | Tests |
+|---|---|---|
+| `hardware` | ✅ | 17 (cada rama y cada borde, las tres máquinas, `NaN`, barrido de la recta positiva, 1 `#[ignore]` que perfila esta máquina) |
+| `models` | ✅ | 15 (vectores SHA-256 del estándar, rechazo con borrado, catálogo, descarga contra un servidor local: limpia, reanudada, `Range` ignorado y cuerpo adulterado; 1 `#[ignore]` contra los archivos reales) |
+
+**58 tests unitarios + 5 de integración pasando. Clippy limpio.**
+
+La descarga se ejercita contra un servidor HTTP mínimo escrito sobre `std::net`
+dentro del propio test: sin dependencia nueva y con control exacto de la
+respuesta, que es lo único que permite probar el caso "el servidor ignora el
+`Range` y manda todo de nuevo" — el que, mal resuelto, concatenaría los bytes de
+dos respuestas y daría un archivo corrupto de 1,5 GB.
+
 ### Pendiente cuando haya acceso físico
 
 Confirmar en la notebook de Jaé: CPU exacto, RAM real, modelo de la integrada, y

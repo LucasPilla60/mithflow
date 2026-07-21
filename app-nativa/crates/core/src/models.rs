@@ -310,17 +310,46 @@ where
     }
 
     let url = modelo.url();
+    // La lista blanca se aplica acá, en la única puerta pública del módulo.
     validar_url(&url)?;
     let carpeta = directorio()?;
     fs::create_dir_all(&carpeta)
         .map_err(|e| format!("no pude crear {}: {e}", carpeta.display()))?;
     let parcial = carpeta.join(format!("{}.part", modelo.nombre_archivo()));
 
+    descargar_verificado(
+        &url,
+        &parcial,
+        &destino,
+        total,
+        modelo.sha256(),
+        progreso,
+    )
+}
+
+/// El mecanismo de la descarga, sin el catálogo.
+///
+/// Separado de [`descargar`] para poder ejercitar contra un servidor local la
+/// parte que de verdad tiene aristas: la negociación del `Range`, el reinicio
+/// cuando el servidor la ignora, y el rechazo de un cuerpo que no verifica.
+/// Es privada a propósito — la lista blanca de origen vive en [`descargar`],
+/// que es la única forma pública de llegar hasta acá.
+fn descargar_verificado<F>(
+    url: &str,
+    parcial: &Path,
+    destino: &Path,
+    total: u64,
+    sha256_esperado: &str,
+    mut progreso: F,
+) -> Result<PathBuf, String>
+where
+    F: FnMut(u64, u64),
+{
     let Continuacion {
         mut escritos,
         archivo,
         mut respuesta,
-    } = abrir_para_continuar(&parcial, total, &url)?;
+    } = abrir_para_continuar(parcial, total, url)?;
     progreso(escritos, total);
 
     let mut destino_parcial = BufWriter::with_capacity(TAMANO_BLOQUE, archivo);
@@ -351,7 +380,7 @@ where
     // Se compara contra el disco y no contra el contador: si el archivo quedó
     // más corto de lo que se creyó escribir, el hash lo detectaría igual, pero
     // este mensaje explica qué pasó y el `.part` sobrevive para reanudarse.
-    let en_disco = fs::metadata(&parcial)
+    let en_disco = fs::metadata(parcial)
         .map_err(|e| format!("no pude medir {}: {e}", parcial.display()))?
         .len();
     if en_disco != total {
@@ -360,8 +389,8 @@ where
         ));
     }
 
-    verificar_y_promover(&parcial, &destino, modelo.sha256())?;
-    Ok(destino)
+    verificar_y_promover(parcial, destino, sha256_esperado)?;
+    Ok(destino.to_path_buf())
 }
 
 /// Dónde seguir escribiendo y de dónde seguir leyendo.
@@ -601,6 +630,217 @@ mod tests {
             Modelo::F16.nombre_archivo()
         );
         assert_eq!(ruta_f16.parent().unwrap(), dir);
+    }
+
+    /// Servidor HTTP mínimo de un solo pedido, sobre `std::net`.
+    ///
+    /// Sin dependencia nueva a propósito: lo que estos tests necesitan es
+    /// controlar exactamente el estado y el cuerpo de la respuesta —incluido el
+    /// caso "el servidor ignora el `Range`"—, y eso ningún servidor de
+    /// juguete de terceros lo hace mejor que treinta líneas acá.
+    ///
+    /// Devuelve la URL y el hilo, que al unirse entrega **el byte desde el que
+    /// el cliente pidió retomar**, o `None` si no mandó `Range`. Es un `u64` y
+    /// no la cabecera cruda porque el nombre de la cabecera lo normaliza el
+    /// cliente (reqwest la manda en minúsculas, que es HTTP válido) y lo que el
+    /// test tiene que afirmar es el desplazamiento, no las mayúsculas.
+    fn servidor_de_prueba(
+        cuerpo: Vec<u8>,
+        honrar_range: bool,
+    ) -> (String, std::thread::JoinHandle<Option<u64>>) {
+        use std::io::{BufRead, BufReader};
+        use std::net::TcpListener;
+
+        let escucha = TcpListener::bind("127.0.0.1:0").expect("no pude abrir un puerto local");
+        let puerto = escucha.local_addr().unwrap().port();
+
+        let hilo = std::thread::spawn(move || {
+            let (mut socket, _) = escucha.accept().expect("nadie se conectó");
+            let mut lector = BufReader::new(socket.try_clone().unwrap());
+
+            let mut pedido_desde: Option<u64> = None;
+            loop {
+                let mut linea = String::new();
+                if lector.read_line(&mut linea).unwrap_or(0) == 0 || linea == "\r\n" {
+                    break;
+                }
+                if linea.to_ascii_lowercase().starts_with("range:") {
+                    pedido_desde = linea
+                        .split("bytes=")
+                        .nth(1)
+                        .and_then(|r| r.trim().trim_end_matches('-').parse().ok());
+                }
+            }
+
+            let desde = pedido_desde.unwrap_or(0) as usize;
+            let respuesta = if honrar_range && desde > 0 && desde < cuerpo.len() {
+                let resto = &cuerpo[desde..];
+                let mut bytes = format!(
+                    "HTTP/1.1 206 Partial Content\r\nContent-Length: {}\r\n\
+                     Content-Range: bytes {}-{}/{}\r\nConnection: close\r\n\r\n",
+                    resto.len(),
+                    desde,
+                    cuerpo.len() - 1,
+                    cuerpo.len()
+                )
+                .into_bytes();
+                bytes.extend_from_slice(resto);
+                bytes
+            } else {
+                // También es la rama del servidor que IGNORA el `Range`.
+                let mut bytes = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    cuerpo.len()
+                )
+                .into_bytes();
+                bytes.extend_from_slice(&cuerpo);
+                bytes
+            };
+
+            socket.write_all(&respuesta).ok();
+            socket.flush().ok();
+            pedido_desde
+        });
+
+        (format!("http://127.0.0.1:{puerto}/modelo.gguf"), hilo)
+    }
+
+    /// Cuerpo reproducible y más grande que un bloque de lectura, para que el
+    /// bucle de copia dé varias vueltas.
+    fn cuerpo_de_prueba() -> Vec<u8> {
+        (0..(TAMANO_BLOQUE * 2 + 1234))
+            .map(|i| (i % 251) as u8)
+            .collect()
+    }
+
+    fn sha256_de(bytes: &[u8]) -> String {
+        let mut hasher = Sha256::new();
+        hasher.update(bytes);
+        hasher.finalize().iter().map(|b| format!("{b:02x}")).collect()
+    }
+
+    #[test]
+    fn una_descarga_limpia_verifica_y_deja_el_archivo_final() {
+        let dir = carpeta_temporal("descarga_limpia");
+        let cuerpo = cuerpo_de_prueba();
+        let (url, hilo) = servidor_de_prueba(cuerpo.clone(), true);
+        let parcial = dir.join("modelo.gguf.part");
+        let destino = dir.join("modelo.gguf");
+
+        let mut avisos = Vec::new();
+        let devuelto = descargar_verificado(
+            &url,
+            &parcial,
+            &destino,
+            cuerpo.len() as u64,
+            &sha256_de(&cuerpo),
+            |hechos, total| avisos.push((hechos, total)),
+        )
+        .expect("la descarga tenía que verificar");
+
+        assert_eq!(devuelto, destino);
+        assert_eq!(fs::read(&destino).unwrap(), cuerpo);
+        assert!(!parcial.exists(), "el .part tiene que desaparecer");
+        assert_eq!(hilo.join().unwrap(), None, "sin .part no se pide Range");
+        assert_eq!(
+            avisos.last().copied(),
+            Some((cuerpo.len() as u64, cuerpo.len() as u64)),
+            "el último aviso de progreso tiene que ser el 100%"
+        );
+    }
+
+    /// La reanudación: con medio archivo en el `.part`, el cliente pide el
+    /// resto y el resultado tiene que verificar igual.
+    #[test]
+    fn una_descarga_cortada_se_retoma_desde_donde_quedo() {
+        let dir = carpeta_temporal("reanuda");
+        let cuerpo = cuerpo_de_prueba();
+        let corte = cuerpo.len() / 3;
+        let parcial = dir.join("modelo.gguf.part");
+        let destino = dir.join("modelo.gguf");
+        fs::write(&parcial, &cuerpo[..corte]).unwrap();
+
+        let (url, hilo) = servidor_de_prueba(cuerpo.clone(), true);
+        descargar_verificado(
+            &url,
+            &parcial,
+            &destino,
+            cuerpo.len() as u64,
+            &sha256_de(&cuerpo),
+            |_, _| {},
+        )
+        .expect("retomar tenía que funcionar");
+
+        assert_eq!(
+            fs::read(&destino).unwrap(),
+            cuerpo,
+            "el archivo retomado no reconstruye el original"
+        );
+        assert_eq!(
+            hilo.join().unwrap(),
+            Some(corte as u64),
+            "no se pidió el tramo que faltaba"
+        );
+    }
+
+    /// Un servidor que ignora el `Range` y manda todo de nuevo NO puede
+    /// terminar en un archivo con los primeros bytes duplicados.
+    #[test]
+    fn si_el_servidor_ignora_el_range_se_empieza_de_cero() {
+        let dir = carpeta_temporal("ignora_range");
+        let cuerpo = cuerpo_de_prueba();
+        let parcial = dir.join("modelo.gguf.part");
+        let destino = dir.join("modelo.gguf");
+        fs::write(&parcial, &cuerpo[..cuerpo.len() / 2]).unwrap();
+
+        let (url, hilo) = servidor_de_prueba(cuerpo.clone(), false);
+        descargar_verificado(
+            &url,
+            &parcial,
+            &destino,
+            cuerpo.len() as u64,
+            &sha256_de(&cuerpo),
+            |_, _| {},
+        )
+        .expect("tenía que rehacer la descarga entera");
+
+        assert_eq!(
+            fs::read(&destino).unwrap(),
+            cuerpo,
+            "los bytes de las dos respuestas se concatenaron"
+        );
+        assert!(hilo.join().unwrap().is_some(), "se pidió Range igual");
+    }
+
+    /// El extremo del módulo: un cuerpo que no es el modelo esperado no se
+    /// instala, aunque mida exactamente lo que debía medir.
+    #[test]
+    fn un_cuerpo_que_no_verifica_no_se_instala() {
+        let dir = carpeta_temporal("cuerpo_malo");
+        let esperado = cuerpo_de_prueba();
+        let mut adulterado = esperado.clone();
+        // Un solo byte distinto, y el mismo tamaño: el centinela de tamaño no
+        // lo detecta, el hash sí. Es exactamente el ataque que importa.
+        adulterado[42] ^= 0xFF;
+
+        let (url, hilo) = servidor_de_prueba(adulterado, true);
+        let parcial = dir.join("modelo.gguf.part");
+        let destino = dir.join("modelo.gguf");
+
+        let error = descargar_verificado(
+            &url,
+            &parcial,
+            &destino,
+            esperado.len() as u64,
+            &sha256_de(&esperado),
+            |_, _| {},
+        )
+        .expect_err("un cuerpo adulterado TIENE que fallar");
+
+        assert!(!destino.exists(), "se instaló un archivo que no verifica");
+        assert!(!parcial.exists(), "el .part adulterado tiene que borrarse");
+        assert!(error.contains("hash"), "el error no explica la causa: {error}");
+        hilo.join().unwrap();
     }
 
     /// Los hashes compilados son la raíz de confianza de la descarga: este test
