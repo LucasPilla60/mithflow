@@ -14,6 +14,33 @@ cpal = "0.16"
 rubato = "~0.16"
 arboard = "3"
 enigo = "0.6"
+# RAM total de la máquina. Sólo se usa `System::total_memory`, así que se
+# desactivan los componentes que sysinfo recolecta por defecto (procesos, red,
+# discos): son permisos y trabajo que este crate no necesita.
+sysinfo = { version = "0.39", default-features = false, features = ["system"] }
+# Sólo para enumerar adaptadores y leer nombre y tipo de dispositivo. Sin
+# `wgsl`/`gles`/`metal`/`webgpu`: no se compila un solo shader acá, y arrastrar
+# naga por un `get_info()` son minutos de compilación por nada.
+wgpu = { version = "30", default-features = false, features = [
+    "std",
+    "parking_lot",
+    "vulkan",
+    "dx12",
+] }
+# `Instance::enumerate_adapters` devuelve un futuro que en escritorio ya está
+# resuelto. `pollster` lo desenvuelve sin arrastrar un runtime async.
+pollster = "0.4"
+sha2 = "0.11"
+dirs = "6"
+# `blocking` en vez de async: la descarga corre en su propio hilo (la interfaz
+# ya no puede bloquearse), así que un runtime de tokio sería complejidad sin
+# contrapartida. En la serie 0.13 la feature se llama `rustls`, no `rustls-tls`:
+# TLS en Rust puro, sin depender de schannel ni de OpenSSL del sistema.
+reqwest = { version = "0.13", default-features = false, features = [
+    "blocking",
+    "rustls",
+    "rustls-native-certs",
+] }
 
 [dev-dependencies]
 hound = "3.5"

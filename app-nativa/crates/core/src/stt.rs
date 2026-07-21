@@ -191,6 +191,18 @@ mod motor {
             })
         }
 
+        /// El backend al que el motor ligó realmente el modelo: `"vulkan"`,
+        /// `"cpu"`, etc.
+        ///
+        /// Es lo que el motor REPORTA, no lo que se le pidió, y esa diferencia
+        /// es todo el valor del método: con `dynamic-backends` pedir Vulkan y
+        /// terminar en CPU es un desenlace previsto (placa sin drivers, sin
+        /// `vulkan-1.dll`, integrada sin soporte de cómputo) y silencioso. Sin
+        /// esto, la única señal de que se cayó a CPU sería que todo va lento.
+        pub fn backend(&self) -> String {
+            self.session.model().backend()
+        }
+
         /// Transcribe audio mono de 16 kHz en f32 y devuelve el texto ya
         /// filtrado. Cadena vacía significa "no había nada que transcribir".
         pub fn transcribe(&mut self, audio: &[f32]) -> Result<String, String> {

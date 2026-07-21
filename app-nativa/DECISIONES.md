@@ -340,6 +340,65 @@ rama "sin GPU utilizable" aunque Vulkan funcione bien. El perfilado por medició
 resuelve solo las tres máquinas sin necesidad de conocer sus especificaciones de
 antemano.
 
+### Hallazgo del Plan 2: el clip de referencia ES la calibración
+
+Al implementar `hardware.rs` se midió el escritorio con el audio de referencia
+de **3 s** que pedía el diseño, perfilando con el `Q4_K_M`:
+
+| Clip de referencia | Factor medido | Tiempo de inferencia | Modelo elegido |
+|---|---|---|---|
+| 3,0 s | **17,25x** | 0,174 s | `Q5_K_M` ❌ |
+| 9,5 s | **62,8–65,3x** | 0,146–0,151 s | `F16` ✅ |
+
+Con 3 s, la máquina más rápida del proyecto —la misma que hace 9,5 s de audio en
+0,221 s, o sea 43x— **no calificaba para el modelo grande**.
+
+**La causa:** whisper rellena toda entrada hasta 30 s antes del codificador, así
+que el tiempo de inferencia es casi independiente de lo que dure el clip (0,174 s
+contra 0,151 s, para clips que difieren 3x). Dividir un costo prácticamente fijo
+por 3 en vez de por 9,5 desinfla el factor unas tres veces. Los umbrales
+(20x / 8x / 3x) salieron de mediciones sobre 9,5 s, así que un clip más corto los
+deja descalibrados.
+
+**Decisión: `SEGUNDOS_DE_REFERENCIA = 9.5`**, igual que la línea base de este
+documento, con los umbrales intactos. Alargar el clip **no cuesta tiempo de
+perfilado** (el trabajo real es el mismo) y devuelve un número directamente
+comparable con las mediciones que ya tiene el proyecto.
+
+**Lección general: en un modelo con ventana de entrada fija, un "factor de tiempo
+real" no es una propiedad de la máquina sola, sino del par (máquina, duración del
+clip).** Elegir la duración del clip de referencia es elegir la calibración de
+los umbrales; las dos cosas no se pueden mover por separado.
+
+### Perfilado real del escritorio (21/7/2026)
+
+```
+ram_total_gb        : 63.9
+gpu_nombre          : Some("NVIDIA GeForce RTX 3080")
+backend             : Vulkan0
+factor_tiempo_real  : 62.84x
+modelo_recomendado  : large-v3-turbo F16
+(perfilado con large-v3-turbo Q4_K_M)
+```
+
+El factor supera al 43x de la línea base porque se perfila con el `Q4_K_M`, que
+es más rápido que el `F16` con el que se midió aquélla. **El modelo con el que se
+perfila forma parte de la calibración**: cambiarlo obliga a revisar los umbrales.
+
+### Modelos del catálogo (SHA-256 verificados el 21/7/2026)
+
+| Archivo | Bytes | SHA-256 |
+|---|---|---|
+| `whisper-large-v3-turbo-F16.gguf` | 1.625.935.520 | `e1d0144e9afc9f479d9e51fc92c7dea9dc36059655eeb3819f16ad2de779046a` |
+| `whisper-large-v3-turbo-Q5_K_M.gguf` | 619.628.128 | `977b5db4e004349dffd1ab9caa10ba5aaba3fc3edd3ba72cadb84328a3203e36` |
+| `whisper-large-v3-turbo-Q4_K_M.gguf` | 536.069.728 | `ecfe9b6beb4ab18fef49187cc968cc74b5168b94629c8830e2ca6b794c6e25ed` |
+
+Van compilados en el binario (`models::Modelo::sha256`) y son la raíz de
+confianza de la descarga: un hash servido por el mismo host que el modelo no
+verifica nada. El catálogo **no** incluye `Q8_0` ni `Q6_K` a propósito: una
+entrada sin su hash medido sería un agujero, y ninguno de los dos es alcanzable
+por la tabla de decisión.
+
 ### Pendiente cuando haya acceso físico
 
 Confirmar en la notebook de Jaé: CPU exacto, RAM real, modelo de la integrada, y

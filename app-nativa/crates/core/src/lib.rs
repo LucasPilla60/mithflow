@@ -7,7 +7,9 @@
 pub mod audio;
 pub mod cleanup;
 pub mod config;
+pub mod hardware;
 pub mod history;
+pub mod models;
 pub mod paste;
 pub mod stt;
 
