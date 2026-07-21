@@ -310,7 +310,7 @@ Datos aportados por el usuario el 21/7/2026.
 | | Escritorio | MSI Katana | Notebook de Jaé |
 |---|---|---|---|
 | CPU | Ryzen 9 3900X | i7 12ª gen | Ryzen 3 o i3 (sin confirmar) |
-| RAM | 32 GB | 32 GB | ~8 GB (sin confirmar) |
+| RAM | **64 GB** | 32 GB | ~8 GB (sin confirmar) |
 | GPU | RTX 3080 10 GB | **RTX 3050 Ti** (4 GB) | Integrada, probablemente AMD |
 | Estado | Medida | Estimada | **Sin confirmar** |
 
