@@ -303,7 +303,45 @@ Ctrl+V y restaurar suman ~2.5 ms: el `sleep(150 ms)` de Python se convirtió en
 sleep de 120 ms, y reducirlo es empírico: no hay señal del sistema que diga
 "la app destino ya procesó el Ctrl+V".
 
-## Caracterización de las notebooks (Task 0.8)
+## Caracterización de las tres máquinas (Task 0.8)
 
-- Notebook de Jaé: PENDIENTE — requiere acceso físico a la máquina
-- Notebook personal: PENDIENTE — requiere acceso físico a la máquina
+Datos aportados por el usuario el 21/7/2026.
+
+| | Escritorio | MSI Katana | Notebook de Jaé |
+|---|---|---|---|
+| CPU | Ryzen 9 3900X | i7 12ª gen | Ryzen 3 o i3 (sin confirmar) |
+| RAM | 32 GB | 32 GB | ~8 GB (sin confirmar) |
+| GPU | RTX 3080 10 GB | **RTX 3050 Ti** (4 GB) | Integrada, probablemente AMD |
+| Estado | Medida | Estimada | **Sin confirmar** |
+
+### Qué implica para cada una
+
+**Escritorio** — medido: Vulkan sobre la 3080, `F16`, 0.221 s para 9.5 s de audio.
+
+**MSI Katana** — tiene **GPU dedicada**, no integrada como se asumía en el spec.
+Una RTX 3050 Ti con 4 GB de VRAM corre Vulkan sin problema. Con el modelo `F16`
+(1.5 GB en disco, ~2.1 GB en uso) entra con margen; si el benchmark muestra
+presión de memoria, `Q5_K_M` (590 MB) es la alternativa. Se espera rendimiento
+holgadamente dentro del criterio 3, probablemente mejor que el criterio 2.
+
+**Notebook de Jaé** — es la máquina restrictiva y la única con incógnitas reales.
+Con gráficos integrados AMD, Vulkan debería funcionar: en integradas equivalentes
+(Radeon 680M) se midieron 3-4x tiempo real, unas 12 veces más rápido que CPU
+pura. Si la integrada no soporta las operaciones de cómputo necesarias, el
+fallback a CPU ya está contemplado. Con ~8 GB de RAM el modelo indicado es
+`Q5_K_M` (590 MB) o `small`.
+
+### Esta incertidumbre valida el diseño de la sección 5 del spec
+
+La notebook de Jaé es exactamente el caso que motivó **elegir el modelo por
+benchmark medido y no por umbrales de VRAM**: una integrada AMD reporta ~128 MB
+de "VRAM dedicada" por DXGI, así que una matriz por umbrales la mandaría a la
+rama "sin GPU utilizable" aunque Vulkan funcione bien. El perfilado por medición
+resuelve solo las tres máquinas sin necesidad de conocer sus especificaciones de
+antemano.
+
+### Pendiente cuando haya acceso físico
+
+Confirmar en la notebook de Jaé: CPU exacto, RAM real, modelo de la integrada, y
+si `vulkaninfo --summary` lista algún dispositivo. **No bloquea el desarrollo**:
+el Plan 2 se puede escribir con lo que hay, porque la selección es automática.
