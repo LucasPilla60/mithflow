@@ -119,17 +119,82 @@ let result = session.run(&pcm, &RunOptions::default())?;  // 16 kHz mono f32 en 
 Tipos: `Model`, `Session`, `RunOptions`, `Transcript`, `Segment`, `Token`, `Word`.
 **No existe `Context::new`.**
 
-### Pendiente
+### Resultado — FUNCIONA
 
-- ¿Compila y transcribe en esta máquina?: PENDIENTE
-- Parámetros disponibles en `RunOptions` (language, sampling, no_speech_threshold): PENDIENTE
-- DECISIÓN final: PENDIENTE
+Ejecutado el 21/7/2026 sobre el fixture de 9.5 s, 5 pasadas tras calentar.
 
-## Backends (Task 0.6b)
+```
+ggml_vulkan: Found 1 Vulkan devices:
+ggml_vulkan: 0 = NVIDIA GeForce RTX 3080 (NVIDIA) | uma: 0 | fp16: 1 | bf16: 1
+             | warp size: 32 | matrix cores: NV_coopmat2
+load_backend: loaded Vulkan backend from ...\ggml-vulkan.dll
+load_backend: loaded CPU backend from ...\ggml-cpu-haswell.dll
+whisper: using vulkan backend: Vulkan0
+Modelo cargado en 1.694s
+Transcripción: mediana 0.221s | min 0.214s | max 0.225s
+```
 
-- cuda + vulkan + dynamic-backends en un binario: PENDIENTE
-- DLLs a empaquetar: PENDIENTE
-- DECISIÓN sobre criterios 1 y 2: PENDIENTE
+Texto devuelto, correcto salvo el vocabulario propio:
+> "Quería comentarte que el dashboard de **Middata** para el cliente ya está
+> listo. Habría que revisar el CRM y los leads pendientes antes de la reunion
+> del jueves."
+
+`Middata` en vez de `MithData` porque el spike usa `RunOptions::default()`, sin
+`initial_prompt`. Confirma que el vocabulario propio hace falta y funciona como
+se esperaba en la versión Python.
+
+### DECISIÓN: `transcribe-cpp` 0.1.3. El plan B (`whisper-rs`) no se usa.
+
+### Hallazgo obligatorio: `init_backends_default()`
+
+Con `dynamic-backends` hay que llamar a `transcribe_cpp::init_backends_default()`
+**antes** de `Model::load`, o falla con `backend error (status 8)`. El propio
+error lo explica. Las DLLs tienen que estar junto al ejecutable.
+
+---
+
+## Backends (Task 0.6b) — RESUELTO SIN NECESIDAD DE CUDA
+
+**Vulkan resultó MÁS RÁPIDO que la línea base con CUDA**, no un 25-30% más lento
+como preveía el spec:
+
+| | Backend | Transcripción (9.5 s de audio) |
+|---|---|---|
+| Python + faster-whisper | CUDA, float16 | 0.280 s |
+| **Rust + transcribe-cpp** | **Vulkan** | **0.221 s** |
+
+Es un **21% más rápido**. La causa probable es que whisper.cpp con Vulkan usa los
+matrix cores (`NV_coopmat2`) y el GGUF F16 en lugar de la conversión de
+CTranslate2. Sea cual sea la razón, el dato desarma la tensión entre los
+criterios 1 y 2 del spec:
+
+**No hace falta compilar con `cuda`.** Un único binario con
+`dynamic-backends` + `vulkan` cumple el criterio 1 (un solo instalador) y supera
+el criterio 2 (latencia) sin concesiones. La Task 0.6b, que existía para resolver
+ese conflicto, queda sin objeto.
+
+Además, `dynamic-backends` eligió **solo** la variante de CPU adecuada para este
+procesador (`ggml-cpu-haswell.dll`) entre las nueve disponibles. Es exactamente
+la adaptación automática por máquina que pedía el requisito central.
+
+### Tamaño real del bundle — el spec lo subestimó 4x
+
+| Componente | Tamaño |
+|---|---|
+| `ggml-vulkan.dll` (shaders) | **70.6 MB** |
+| 9 variantes de CPU (`sse42`, `haswell`, `skylakex`, `icelake`, `alderlake`...) | ~7.5 MB |
+| `ggml-base.dll`, `ggml.dll`, `transcribe.dll` | ~2.2 MB |
+| Ejecutable | 0.2 MB |
+| **Total sin modelo** | **80.7 MB** |
+
+El spec estimaba "~20 MB". El instalador real va a rondar los **85 MB**, más el
+modelo que se descarga aparte. Sigue siendo muy inferior a empaquetar Python con
+CUDA (2-3 GB), pero hay que corregir la cifra en el spec y en el README.
+
+**Optimización disponible si molesta el tamaño:** las 9 variantes de CPU son
+alternativas del mismo backend. Se podrían recortar a 2 o 3 (`sse42` como piso,
+`haswell`, `alderlake`) perdiendo algo de rendimiento en CPUs específicas.
+Decisión para el Plan 5 (empaquetado).
 
 ## Atajo global (Task 0.6)
 

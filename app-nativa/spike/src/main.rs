@@ -54,6 +54,12 @@ fn main() {
         audio.len() as f32 / 16000.0
     );
 
+    // Con `dynamic-backends` los backends de ggml son DLLs separadas que hay
+    // que cargar ANTES del modelo. Sin esto: "backend error (status 8)".
+    // Es la contrapartida de tener un binario que se adapta a cada máquina.
+    transcribe_cpp::init_backends_default().expect("no pude inicializar los backends");
+    println!("Backends inicializados.");
+
     let t0 = std::time::Instant::now();
     let modelo = transcribe_cpp::Model::load(&model).expect("no pude cargar el modelo");
     let mut session = modelo.session().expect("no pude crear la sesión");
