@@ -277,10 +277,21 @@ pub fn descargar_modelo(app: AppHandle, clave: String) -> Result<(), String> {
                 );
             });
             let final_ = match salida {
-                Ok(_) => ProgresoDescarga {
-                    terminado: true,
-                    ..ProgresoDescarga::en_curso(etiqueta, modelo.bytes(), modelo.bytes())
-                },
+                Ok(_) => {
+                    // Cerrar el lazo: el motor carga el modelo UNA vez, al
+                    // arrancar. Sin este aviso, alguien que abrió la app sin
+                    // ningún modelo, la vio en Error y bajó uno desde Ajustes
+                    // se queda mirando el mismo Error sin saber que ya está.
+                    eventos::aviso(
+                        &app,
+                        "Modelo descargado. Reiniciá MithFlow para empezar a usarlo.",
+                        "info",
+                    );
+                    ProgresoDescarga {
+                        terminado: true,
+                        ..ProgresoDescarga::en_curso(etiqueta, modelo.bytes(), modelo.bytes())
+                    }
+                }
                 Err(e) => ProgresoDescarga::fallada(etiqueta, e),
             };
             eventos::progreso_descarga(&app, final_);
