@@ -1,0 +1,52 @@
+[package]
+name = "mithflow-app"
+description = "MithFlow — dictado por voz local"
+authors = ["MithData"]
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "mithflow"
+path = "src/main.rs"
+
+[features]
+# La activa `tauri build` por su cuenta. Sin ella, `generate_context!` compila
+# en modo desarrollo y el ejecutable busca el frontend en localhost:1420 en vez
+# de llevarlo adentro: un `cargo build --release` pelado da una ventana en
+# blanco. Para un binario autónomo:
+#   cargo build --release --features custom-protocol
+custom-protocol = ["tauri/custom-protocol"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+mithflow-core = { path = "../../crates/core" }
+# `tray-icon` no viene por defecto: sin ella no existe `tauri::tray`.
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-store = "2"
+tauri-plugin-single-instance = "2"
+tauri-plugin-autostart = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# `grab` (el que SUPRIME la tecla) está detrás de `unstable_grab`, y el crate no
+# habilita ninguna feature por defecto. Ver DECISIONES.md, hallazgo 3.
+rdev = { version = "0.5", features = ["unstable_grab"] }
+# Sólo para los cuatro tonos de realimentación. `default-features = false` deja
+# afuera los decodificadores (symphonia: mp3, flac, vorbis, mp4) y la captura:
+# los samples se generan en memoria y grabar ya lo hace `mithflow-core`. Queda
+# únicamente `playback`, que es la salida de audio.
+rodio = { version = "0.22", default-features = false, features = ["playback"] }
+
+# Dependencia directa SÓLO para que el `build.rs` de esta app reciba las
+# variables `DEP_TRANSCRIBE_CPP_*`. Cargo se las pasa al build script del crate
+# que depende DIRECTAMENTE del que declara `links`, y nuestra ruta real pasa por
+# `mithflow-core`, que no las reenvía. Sin esto no hay forma de saber en tiempo
+# de compilación dónde quedaron las DLLs de ggml que el instalador tiene que
+# llevar. Las features tienen que coincidir con las de `mithflow-core`, o cargo
+# compilaría dos veces la librería nativa.
+[target.'cfg(windows)'.dependencies]
+transcribe-cpp = { version = "0.1.3", default-features = false, features = [
+    "dynamic-backends",
+    "vulkan",
+] }

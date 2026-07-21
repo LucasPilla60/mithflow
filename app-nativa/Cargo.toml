@@ -1,5 +1,15 @@
 [workspace]
-members = ["crates/core", "crates/cli"]
+members = ["crates/core", "crates/cli", "app/src-tauri"]
+# `cargo test` / `cargo clippy` sin `-p` corren sólo sobre estos dos. La app de
+# Tauri queda afuera del default a propósito: `tauri::generate_context!` exige
+# que `app/dist/` exista en tiempo de COMPILACIÓN, y ese directorio lo produce
+# `npm run build` y está en `.gitignore`. Sin esta línea, un clon recién hecho
+# no podría correr los tests del núcleo sin instalar Node primero.
+# Es miembro igual (y no `exclude`) para compartir el directorio `target/`: ahí
+# es donde el build de `transcribe-cpp-sys` deja las DLLs de ggml, así que la
+# app las encuentra al lado de su ejecutable sin copiarlas de nuevo, y no hay
+# que recompilar whisper.cpp con sus shaders de Vulkan por segunda vez.
+default-members = ["crates/core", "crates/cli"]
 exclude = ["spike", "spike-hotkey"]
 resolver = "2"
 

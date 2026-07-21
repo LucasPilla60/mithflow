@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Permisos de la ventana principal. Deliberadamente mínimo: el frontend sólo usa los comandos de esta app (que en Tauri v2 no necesitan permiso) y escucha eventos, que ya vienen en core:default. No se habilita ningún plugin hacia el JavaScript: el store, el autoarranque y las descargas se manejan desde Rust, que es donde se validan.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

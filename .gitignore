@@ -1,6 +1,7 @@
 # Historial de dictados: contiene EN TEXTO PLANO todo lo que se dictó.
 # Nunca debe commitearse ni salir de la máquina.
 history.jsonl
+history-nativo.jsonl
 status.json
 *.log
 
@@ -18,6 +19,11 @@ target/
 app-nativa/target/
 node_modules/
 dist/
+# Generado por tauri-build para autocompletar las capabilities.
+app-nativa/app/src-tauri/gen/
+# Las 13 DLLs de ggml (~84 MB) que el build script junta para que el bundler
+# las empaquete. Son artefactos de compilación: se regeneran solas.
+app-nativa/app/src-tauri/transcribe-libs/
 
 # NOTA: app-nativa/DECISIONES.md SÍ se versiona a propósito. Es el registro de
 # las decisiones del spike (qué crate, qué backend, qué DLLs empaquetar) y es
