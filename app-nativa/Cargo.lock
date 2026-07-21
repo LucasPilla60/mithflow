@@ -613,6 +613,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "mithflow-cli"
+version = "0.1.0"
+dependencies = [
+ "mithflow-core",
+]
+
+[[package]]
 name = "mithflow-core"
 version = "0.1.0"
 dependencies = [

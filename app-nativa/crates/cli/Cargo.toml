@@ -1,0 +1,7 @@
+[package]
+name = "mithflow-cli"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+mithflow-core = { path = "../core" }
