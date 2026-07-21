@@ -356,7 +356,6 @@ dependencies = [
  "chrono",
  "cpal",
  "hound",
- "once_cell",
  "regex",
  "rubato",
  "serde",

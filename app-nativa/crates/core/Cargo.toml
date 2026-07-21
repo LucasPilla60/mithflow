@@ -8,7 +8,6 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 chrono = "0.4"
 regex = "1"
-once_cell = "1"
 cpal = "0.16"
 # Fijar la serie 0.16: en versiones posteriores la API cambia por completo
 # (`SincFixedIn` pasa a ser `Async::new_sinc` y `f_cutoff` a `Option<f32>`).
