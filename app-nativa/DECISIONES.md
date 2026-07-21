@@ -219,11 +219,24 @@ la tiene que hacer una persona.
 | `history` | ✅ | 6 (incluye BOM y el historial real de 21 entradas) |
 | `audio` | ✅ | 6 (incluye el WAV estéreo 48 kHz real) |
 | `paste` | ✅ | 4 (2 activos + 2 `#[ignore]` con medición) |
-| `stt` | ⏳ | Bloqueado por la decisión del spike |
-| pipeline `dictate()` | ⏳ | Depende de `stt` |
-| CLI | ⏳ | Depende del pipeline |
+| `stt` | ✅ | 3 + 5 de integración con modelo real |
+| pipeline `dictate()` | ✅ | 4 (con doble que paniquea si se toca el modelo) |
+| CLI | ✅ | Arranca, calienta el motor y sale limpio |
 
-**21 tests pasando, 4 ignorados. Clippy limpio.**
+**28 tests unitarios + 5 de integración pasando. Clippy limpio. Fase 1 COMPLETA.**
+
+### Hallazgo: el calentamiento del motor es obligatorio
+
+La **primera inferencia del sistema cuesta 17.4 s** compilando shaders de Vulkan.
+El caché del driver persiste entre procesos, así que se paga una sola vez por
+máquina (y de nuevo tras actualizar el driver). Sin calentamiento al arrancar, el
+primer dictado del usuario se sentiría roto.
+
+**Sutileza:** el calentamiento **no puede usar silencio**. La compuerta de energía
+RMS corta antes de llegar al modelo, así que un buffer de ceros vuelve en
+microsegundos sin compilar un solo shader — el calentamiento sería un no-op
+silencioso. Se usa medio segundo de senoide a 220 Hz, con RMS 3.5x por encima
+del umbral.
 
 ### Bugs reales encontrados durante la implementación
 
@@ -236,6 +249,33 @@ la tiene que hacer una persona.
 2. **BOM descartaba la primera entrada del historial en silencio.** `load()`
    usa `filter_map(...ok())`: un BOM no da error, simplemente hace que la
    primera línea no parsee y se pierda sin aviso. Detectado y cerrado con test.
+
+3. **El BOM mordió una segunda vez, en la CLI.** PowerShell antepone un BOM
+   UTF-8 a la entrada redirigida y `trim()` no lo saca (U+FEFF no tiene la
+   propiedad `White_Space`), así que `"q" | mithflow-cli.exe` no salía. Es la
+   misma clase de bug que el punto 2: **en Windows, toda entrada de texto
+   externa puede traer BOM y hay que sacarlo explícitamente.**
+
+4. **El filtro anti-alucinación por umbral no alcanza.** Se barrieron 6
+   combinaciones de `no_speech_thold` (0.1–0.8) × `logprob_thold` (-1.0–-0.3):
+   **todas alucinaron** sobre silencio y sobre ruido. Y sobre ruido el modelo
+   inventa cadenas distintas cada vez ("911", "Moderna, Civilization…"), así que
+   una lista de bloqueo tampoco cierra: es inenumerable. Además, subir
+   `no_speech_thold` a 0.8 filtra **menos**, no más — la condición en el C++ es
+   `no_speech_prob > thold && avg_logprob < logprob_thold`.
+
+   La solución es una **compuerta de energía RMS antes del modelo**, que es
+   determinista y no puede inventar texto. Medido:
+
+   | | RMS |
+   |---|---|
+   | Silencio | 0.000000 |
+   | Ruido de fondo | 0.002891 |
+   | Voz | 0.071–0.101 |
+
+   25x de separación. `MIN_SPEECH_RMS = 0.01`, deliberadamente por debajo del
+   punto medio geométrico: entre transcribir ruido y perder un dictado flojo, el
+   error caro es el segundo.
 
 ### Medición del pegado (Task 1.7)
 
