@@ -200,13 +200,26 @@ Decisión para el Plan 5 (empaquetado).
 
 - Feature `unstable_grab` requerida: **CONFIRMADO** (ver Hallazgo 3)
 - Compila: **SÍ**, binario en `spike-hotkey/target/release/spike-hotkey.exe` (140 KB)
-- rdev grab() suprime en apps normales: **PENDIENTE — requiere prueba manual**
-- Suprime en ventana elevada: **PENDIENTE — se espera que NO**
-- DECISIÓN: PENDIENTE
+- **rdev grab() SUPRIME la tecla: CONFIRMADO** (prueba manual, 21/7/2026)
+- Suprime en ventana elevada: no probado — se asume que NO (limitación de Windows)
 
-La prueba requiere apretar F9 con el foco en Bloc de notas, VS Code, Chrome y
-una consola elevada, y observar si la aplicación reacciona. No es automatizable:
-la tiene que hacer una persona.
+### DECISIÓN: `rdev` con la feature `unstable_grab`. `tauri-plugin-global-shortcut` no se incorpora.
+
+**Cómo se verificó, y por qué la primera prueba no servía.** El primer intento fue
+con el Bloc de notas, y **no prueba nada**: F9 no tiene ninguna función ahí, así
+que "no pasó nada" es idéntico tanto si la tecla se suprimió como si llegó y la
+aplicación la ignoró.
+
+La prueba concluyente fue **VS Code**, donde **F9 pone o saca un breakpoint** en
+la línea del cursor — efecto visible e inequívoco. Con el cursor en la línea 9 de
+un archivo `.sql` y VS Code enfocado, al apretar F9:
+
+- La consola del spike registró `F9 capturada y SUPRIMIDA (#2)`.
+- **No apareció ningún breakpoint.** VS Code nunca recibió la tecla.
+
+**Lección de diseño de pruebas:** para verificar supresión de teclas hay que
+elegir una aplicación donde esa tecla tenga un efecto observable. Un objetivo que
+ignora la tecla da un falso positivo.
 
 ---
 
