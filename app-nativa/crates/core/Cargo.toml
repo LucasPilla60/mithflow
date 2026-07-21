@@ -12,6 +12,11 @@ cpal = "0.16"
 # Fijar la serie 0.16: en versiones posteriores la API cambia por completo
 # (`SincFixedIn` pasa a ser `Async::new_sinc` y `f_cutoff` a `Option<f32>`).
 rubato = "~0.16"
+arboard = "3"
+enigo = "0.6"
 
 [dev-dependencies]
 hound = "3.5"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.58", features = ["Win32_System_DataExchange"] }
