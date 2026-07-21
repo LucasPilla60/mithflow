@@ -1,0 +1,16 @@
+[theme]
+base = "dark"
+primaryColor = "#22C3A6"
+backgroundColor = "#0D1117"
+secondaryBackgroundColor = "#161B26"
+textColor = "#E6EDF3"
+font = "sans serif"
+
+[browser]
+gatherUsageStats = false
+
+[server]
+port = 8501
+# Solo accesible desde esta máquina: el historial de dictados es privado
+# (puede contener datos personales, de clientes o cosas dichas sin pensar).
+address = "127.0.0.1"

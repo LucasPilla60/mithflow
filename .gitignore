@@ -1,0 +1,27 @@
+# Historial de dictados: contiene EN TEXTO PLANO todo lo que se dictó.
+# Nunca debe commitearse ni salir de la máquina.
+history.jsonl
+status.json
+*.log
+
+# Entornos y caché
+.venv/
+__pycache__/
+*.pyc
+
+# Modelos descargados (pesan 0.5-1.5 GB)
+models/
+app-nativa/models/
+
+# Build de Rust / Tauri
+target/
+app-nativa/target/
+node_modules/
+dist/
+
+# NOTA: app-nativa/DECISIONES.md SÍ se versiona a propósito. Es el registro de
+# las decisiones del spike (qué crate, qué backend, qué DLLs empaquetar) y es
+# el insumo de los planes siguientes. No contiene datos sensibles.
+
+# Backups de base de datos (política global: nunca al repo)
+backups/
