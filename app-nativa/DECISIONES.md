@@ -13,11 +13,28 @@ Registro de las respuestas del spike. Es el insumo de los Planes 2 a 5.
 | VS Build Tools | 2022 (17.14.36) |
 | Target triple | `x86_64-pc-windows-msvc` |
 
-**Hallazgo:** `winget install Rustlang.Rustup` instala el gestor pero **no una
+**Hallazgo 1:** `winget install Rustlang.Rustup` instala el gestor pero **no una
 toolchain**, y en esta máquina la primera instalación quedó corrupta
 (*"Missing manifest in toolchain"*). Hizo falta
 `rustup toolchain uninstall stable` seguido de
 `rustup toolchain install stable --profile default`. El plan se corrigió.
+
+**Hallazgo 2 — el Vulkan SDK es dependencia de COMPILACIÓN, no opcional.**
+El primer intento de compilar el spike falló con:
+
+```
+CMake Error: Could NOT find Vulkan (missing: Vulkan_LIBRARY Vulkan_INCLUDE_DIR glslc)
+```
+
+La feature `vulkan` de `transcribe-cpp` necesita cabeceras, librería y el
+compilador de shaders `glslc`, no solo el runtime `vulkan-1.dll`. Se instaló
+`KhronosGroup.VulkanSDK` (1.4.350.0, shaderc v2026.2) y el plan se corrigió con
+un paso propio. Variables necesarias: `VULKAN_SDK` y `%VULKAN_SDK%\Bin` en PATH.
+
+**Hallazgo 3 — `rdev::grab` exige la feature `unstable_grab`.** Confirmado: el
+crate no habilita ninguna feature por defecto. Con `rdev = "0.5"` a secas el
+import de `grab` no resuelve. Además `grab` toma un callback `Fn`, no `FnMut`:
+cualquier estado mutable tiene que ir en un atómico.
 
 ---
 
@@ -116,9 +133,57 @@ Tipos: `Model`, `Session`, `RunOptions`, `Transcript`, `Segment`, `Token`, `Word
 
 ## Atajo global (Task 0.6)
 
-- rdev grab() suprime en apps normales: PENDIENTE
-- Suprime en ventana elevada: PENDIENTE
+- Feature `unstable_grab` requerida: **CONFIRMADO** (ver Hallazgo 3)
+- Compila: **SÍ**, binario en `spike-hotkey/target/release/spike-hotkey.exe` (140 KB)
+- rdev grab() suprime en apps normales: **PENDIENTE — requiere prueba manual**
+- Suprime en ventana elevada: **PENDIENTE — se espera que NO**
 - DECISIÓN: PENDIENTE
+
+La prueba requiere apretar F9 con el foco en Bloc de notas, VS Code, Chrome y
+una consola elevada, y observar si la aplicación reacciona. No es automatizable:
+la tiene que hacer una persona.
+
+---
+
+## Estado de la Fase 1 (núcleo en Rust)
+
+| Módulo | Estado | Tests |
+|---|---|---|
+| `config` | ✅ | — |
+| `cleanup` | ✅ | 7 (12 casos + paridad con puntuación + idempotencia) |
+| `history` | ✅ | 6 (incluye BOM y el historial real de 21 entradas) |
+| `audio` | ✅ | 6 (incluye el WAV estéreo 48 kHz real) |
+| `paste` | ✅ | 4 (2 activos + 2 `#[ignore]` con medición) |
+| `stt` | ⏳ | Bloqueado por la decisión del spike |
+| pipeline `dictate()` | ⏳ | Depende de `stt` |
+| CLI | ⏳ | Depende del pipeline |
+
+**21 tests pasando, 4 ignorados. Clippy limpio.**
+
+### Bugs reales encontrados durante la implementación
+
+1. **Paridad de tartamudeos rota.** `split_whitespace()` deja la puntuación
+   pegada al token, así que `"el el."` no se colapsaba mientras Python sí lo
+   hace con `\b`. Es el caso más frecuente de tartamudeo al dictar: justo antes
+   de la pausa que el modelo transcribe como coma o punto. Arreglado comparando
+   el núcleo alfanumérico del token; verificado 13/13 contra Python.
+
+2. **BOM descartaba la primera entrada del historial en silencio.** `load()`
+   usa `filter_map(...ok())`: un BOM no da error, simplemente hace que la
+   primera línea no parsee y se pierda sin aviso. Detectado y cerrado con test.
+
+### Medición del pegado (Task 1.7)
+
+| | Python | Rust |
+|---|---|---|
+| `paste()` de punta a punta | 460 ms (esperas fijas) | **122.5 ms** (mediana, N=10) |
+
+De esos 122.5 ms, **120 ms son el margen fijo** que queda antes de restaurar el
+portapapeles. Copiar, esperar la confirmación por número de secuencia, enviar
+Ctrl+V y restaurar suman ~2.5 ms: el `sleep(150 ms)` de Python se convirtió en
+2.5 ms de espera confirmada. El único margen que queda en este módulo es ese
+sleep de 120 ms, y reducirlo es empírico: no hay señal del sistema que diga
+"la app destino ya procesó el Ctrl+V".
 
 ## Caracterización de las notebooks (Task 0.8)
 

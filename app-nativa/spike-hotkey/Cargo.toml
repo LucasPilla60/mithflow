@@ -1,0 +1,9 @@
+[package]
+name = "spike-hotkey"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# `grab` está detrás de la feature `unstable_grab` y el crate NO habilita
+# ninguna feature por defecto: con `rdev = "0.5"` a secas, el import falla.
+rdev = { version = "0.5", features = ["unstable_grab"] }

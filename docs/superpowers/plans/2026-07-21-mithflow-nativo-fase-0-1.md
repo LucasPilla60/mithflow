@@ -69,7 +69,17 @@ rustup default stable
 Si `rustc` responde *"Missing manifest in toolchain"*, la instalación quedó a medias (pasó al ejecutar este plan): reinstalarla limpia con
 `rustup toolchain uninstall stable; rustup toolchain install stable --profile default`.
 
-- [ ] **Paso 4: CUDA Toolkit — solo en la máquina con GPU NVIDIA**
+- [ ] **Paso 4: Vulkan SDK — obligatorio, no opcional**
+
+Compilar `transcribe-cpp` con la feature `vulkan` requiere el **SDK**, no solo el runtime: CMake busca `Vulkan_LIBRARY`, `Vulkan_INCLUDE_DIR` y el compilador de shaders `glslc`. Sin él la compilación falla con *"Could NOT find Vulkan"* (pasó al ejecutar este plan).
+
+```powershell
+winget install --id KhronosGroup.VulkanSDK -e --accept-source-agreements --accept-package-agreements
+```
+
+Verificar en una consola nueva: `vulkaninfo --summary` debe listar al menos un dispositivo, y `glslc --version` debe responder. El SDK trae además `vulkaninfo`, que la Task 0.8 usa para caracterizar las notebooks.
+
+- [ ] **Paso 5: CUDA Toolkit — solo en la máquina con GPU NVIDIA**
 
 Necesario para la Task 0.6b. Sin `nvcc`, agregar la feature `cuda` falla al compilar y el resultado se confundiría con "los backends no conviven", que es la respuesta equivocada a la pregunta que decide los criterios 1 y 2 del spec.
 
@@ -81,7 +91,7 @@ if (Get-Command nvidia-smi -ErrorAction SilentlyContinue) {
 }
 ```
 
-- [ ] **Paso 5: Verificar en una consola NUEVA (el PATH cambió)**
+- [ ] **Paso 6: Verificar en una consola NUEVA (el PATH cambió)**
 
 ```powershell
 rustc --version; cargo --version; cmake --version | Select-Object -First 1
@@ -89,7 +99,7 @@ rustc --version; cargo --version; cmake --version | Select-Object -First 1
 
 Esperado: Rust **1.84 o superior** (el paso 6 usa un comando agregado en esa versión). Si es menor, correr `rustup update`.
 
-- [ ] **Paso 6: Anotar el target triple**
+- [ ] **Paso 7: Anotar el target triple**
 
 ```powershell
 rustc --print host-tuple
@@ -99,7 +109,7 @@ Esperado: `x86_64-pc-windows-msvc`. Tauri lo necesita en el Plan 4.
 
 > Si Rust es anterior a 1.84, `--print host-tuple` no existe. Alternativa: `rustc -vV | Select-String "^host:"`.
 
-- [ ] **Paso 7: Inicializar el repositorio**
+- [ ] **Paso 8: Inicializar el repositorio**
 
 El plan hace commit en cada tarea y hoy `D:\MithFlow` **no es un repositorio git**. El `.gitignore` ya existe y excluye `history.jsonl`, así que el historial de dictados no se versiona.
 
