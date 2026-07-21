@@ -29,6 +29,15 @@ pub const SAMPLE_RATE: u32 = 16_000;
 /// Audio más corto que esto se descarta.
 pub const MIN_AUDIO_SECS: f32 = 0.5;
 
+/// Nivel RMS por debajo del cual se considera que no hubo voz y ni siquiera se
+/// llama al modelo.
+///
+/// Medido sobre los fixtures (10 s cada uno): silencio 0.000000, ruido de fondo
+/// 0.002891, voz 0.071088 y 0.100555. La separación es de 25x, y este umbral
+/// queda algo por debajo del punto medio geométrico (0.0143) a propósito: entre
+/// transcribir ruido y perder un dictado flojito, el error caro es el segundo.
+pub const MIN_SPEECH_RMS: f32 = 0.01;
+
 /// El tono de inicio suena por los parlantes y el micrófono lo capta, sobre
 /// todo en notebooks. Se descarta ese tramo del buffer.
 pub const TONE_GUARD_SECS: f32 = 0.2;

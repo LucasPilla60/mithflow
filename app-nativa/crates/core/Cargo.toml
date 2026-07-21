@@ -20,3 +20,9 @@ hound = "3.5"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.58", features = ["Win32_System_DataExchange"] }
+# default-features = false NO es opcional: `metal` es feature por defecto de
+# transcribe-cpp y arrastrarla en Windows rompe la compilación.
+transcribe-cpp = { version = "0.1.3", default-features = false, features = [
+    "dynamic-backends",
+    "vulkan",
+] }
