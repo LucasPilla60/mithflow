@@ -419,3 +419,230 @@ dos respuestas y daría un archivo corrupto de 1,5 GB.
 Confirmar en la notebook de Jaé: CPU exacto, RAM real, modelo de la integrada, y
 si `vulkaninfo --summary` lista algún dispositivo. **No bloquea el desarrollo**:
 el Plan 2 se puede escribir con lo que hay, porque la selección es automática.
+
+---
+
+## Plan 3 — el cascarón de Tauri v2 (21/7/2026)
+
+### Estructura
+
+```
+app-nativa/
+├── Cargo.toml            workspace: core, cli y app; default-members = core + cli
+└── app/
+    ├── package.json      React 19 + TypeScript + Vite 7
+    ├── src/              frontend PROVISORIO (api.ts + App.tsx)
+    └── src-tauri/
+        ├── build.rs      junta las DLLs de ggml para el bundler
+        ├── tauri.conf.json
+        ├── capabilities/default.json   sólo core:default
+        └── src/
+            ├── main.rs      arranque, plugins, cableado de los hilos
+            ├── estado.rs    la máquina de estados y su espejo de lectura
+            ├── director.rs  el hilo que decide (único escritor del estado)
+            ├── motor.rs     el hilo que carga el modelo y transcribe
+            ├── atajo.rs     el hilo de rdev::grab
+            ├── sonidos.rs   los cuatro tonos
+            ├── bandeja.rs   ícono y menú
+            ├── ajustes.rs   persistencia con tauri-plugin-store
+            ├── comandos.rs  la API que ve el frontend
+            ├── eventos.rs   los eventos que se emiten
+            ├── ventana.rs   mostrar / esconder / enfocar
+            └── rutas.rs     dónde vive cada archivo
+```
+
+**`default-members` es una decisión, no un descuido.** `tauri::generate_context!`
+exige que `app/dist/` exista **en tiempo de compilación**, y ese directorio lo
+produce `npm run build` y está en `.gitignore`. Si la app fuera miembro por
+defecto, un clon recién hecho no podría correr `cargo test` sin instalar Node
+primero. Así, los tests del núcleo siguen siendo un comando sin prerrequisitos y
+la app se compila con `-p mithflow-app`.
+
+Sí es **miembro** del workspace (y no `exclude`) para compartir `target/`: ahí es
+donde el build de `transcribe-cpp-sys` deja las DLLs de ggml, así que la app las
+tiene al lado de su ejecutable sin copiar nada, y no hay que recompilar
+whisper.cpp con sus shaders de Vulkan una segunda vez.
+
+### Los cinco hilos
+
+| Hilo | Qué hace | Por qué está solo |
+|---|---|---|
+| principal | ventana, bandeja, comandos | lo exige el sistema operativo |
+| `atajo` | `rdev::grab` | bloquea para siempre |
+| `director` | la máquina de estados | único escritor del estado |
+| `motor` | carga el modelo y transcribe | 20 s de arranque, segundos por dictado |
+| `sonidos` | los cuatro tonos | retiene el `Stream` de salida, que no es `Sync` |
+
+Se hablan por canales. La única memoria compartida es un espejo de **sólo
+lectura** del estado (`RwLock<EstadoDto>`), que existe para que el comando
+`leer_estado` no tenga que esperar a que algo cambie.
+
+### El hilo del atajo, y las tres restricciones que le dan forma
+
+1. **`grab` bloquea**: instala un hook de bajo nivel y se queda en su bucle de
+   mensajes. Hilo dedicado, y la única salida es un `Sender`.
+2. **El callback es `Fn`, no `FnMut`**: todo el estado configurable (tecla,
+   pausa, tecla-abajo) vive en atómicos globales. El `Sender` sí se puede
+   capturar por valor, porque `send` toma `&self`.
+3. **El hook corre en el camino crítico del teclado**: si tarda más que
+   `LowLevelHooksTimeout` (300 ms), Windows lo desengancha sin avisar. El
+   callback sólo hace atómicos y un `send` que no bloquea.
+
+**La repetición automática hay que filtrarla.** Windows manda `KeyPress`
+repetidos mientras se mantiene una tecla apretada; sin la guarda `ABAJO`, dejar
+el dedo en F9 medio segundo dispararía decenas de arranques y paradas. Hay test.
+
+Cambiar la tecla no reinicia el hilo: el callback relee el atómico en cada
+evento. La pausa deja el hook instalado y devuelve `Some(evento)`, o sea que la
+tecla llega normalmente a la aplicación enfocada.
+
+### La máquina de estados, y la carrera que no puede ocurrir
+
+```
+Cargando → Listo ⇄ Grabando → Transcribiendo → Listo
+```
+
+Al pasar de `Grabando` a `Transcribiendo` el `Vec<f32>` **se mueve** al motor
+por el canal: el director se queda literalmente sin el buffer. Un segundo atajo
+durante la transcripción no tiene nada que pisar y recibe "estoy transcribiendo
+el anterior". Es el bug que la versión Python resolvió pasando `captured` por
+parámetro; acá no hay que resolverlo, no se puede escribir.
+
+Apretar el atajo mientras carga **no se ignora en silencio**: suena el tono de
+error y sale un evento `aviso`. Sin realimentación, "no pasó nada" y "todavía no
+estoy listo" se ven igual.
+
+**Tope de grabación**: mientras graba, el director usa `recv_timeout(250 ms)` y
+vigila `elapsed_secs`. Sin eso, un atajo apretado sin querer deja el micrófono
+abierto y el buffer creciendo a 384 KB/s hasta que alguien se dé cuenta.
+
+### Empaquetado: dónde quedan las 13 DLLs — HALLAZGO
+
+**Compilando ya quedan bien, pero de casualidad.** El build de
+`transcribe-cpp-sys` copia las DLLs al directorio del perfil de cargo, que es
+justo donde queda el `.exe`. Verificado:
+
+```
+target/release/mithflow.exe          19,2 MB
+target/release/ggml-vulkan.dll       74,0 MB   <- el 91% del peso
+target/release/ggml-cpu-*.dll (9)     8,1 MB
+target/release/ggml-base.dll, ggml.dll, transcribe.dll
+13 DLLs, 81 MB en total
+```
+
+Y el arranque real lo confirma:
+
+```
+load_backend: loaded Vulkan backend from D:\MithFlow\app-nativa\target\release\ggml-vulkan.dll
+load_backend: loaded CPU backend from D:\MithFlow\app-nativa\target\release\ggml-cpu-haswell.dll
+whisper: using vulkan backend: Vulkan0
+```
+
+**El instalador NO hereda esa casualidad.** El bundler de Tauri empaqueta lo que
+se le nombra: sin declararlas, el `.msi`/`.exe` sale sin motor y la app instalada
+falla con `backend error (status 8)`. Se resolvió como documenta el README de
+`transcribe-cpp`:
+
+- `build.rs` copia las librerías a `src-tauri/transcribe-libs/` (ruta fija, que
+  es lo que un archivo de configuración puede nombrar: los directorios de cargo
+  llevan un hash).
+- `tauri.conf.json` declara `"resources": { "transcribe-libs/*": "." }`. En
+  Windows los recursos se instalan al lado del ejecutable, que es exactamente
+  donde `init_backends_default()` los busca.
+- `transcribe-cpp` figura como dependencia **directa** de la app aunque el
+  código no la use: cargo sólo le pasa las variables `DEP_TRANSCRIBE_CPP_*` al
+  build script del que depende directamente del crate con `links`, y nuestra
+  ruta real pasa por `mithflow-core`, que no las reenvía.
+
+**Sub-hallazgo de orden:** la copia tiene que correr **antes** de
+`tauri_build::build()`. Ahí se resuelve el glob de `bundle.resources`, y con
+`transcribe-libs/` todavía vacío la compilación aborta con
+`glob pattern transcribe-libs/* path not found or didn't match any files`.
+
+*Falta verificar con un `tauri build` real (Plan 5): acá se comprobó que las
+DLLs quedan junto al ejecutable y que el glob resuelve, no el contenido del
+instalador.*
+
+### HALLAZGO: `cargo build --release` a secas da un binario de desarrollo
+
+`tauri-build` decide dev/producción por la feature `custom-protocol` de `tauri`,
+que la CLI activa sola en `tauri build`. Con un `cargo build --release` pelado,
+`generate_context!` compila en modo desarrollo y el ejecutable busca el frontend
+en `http://localhost:1420`: ventana en blanco, sin ningún error visible. Se
+agregó la feature al `Cargo.toml` de la app. El comando correcto es:
+
+```powershell
+cargo build --release -p mithflow-app --features custom-protocol
+```
+
+### Calentamiento del motor: medido
+
+| Corrida | Calentamiento |
+|---|---|
+| Primera (shaders del `Q4_K_M` sin compilar) | **39,2 s** |
+| Segunda (caché del driver caliente) | **0,2 s** |
+
+Confirma el hallazgo de la Fase 1 y su corolario: **el caché de shaders es por
+máquina y por juego de shaders**, no por proceso. Los 39 s superan los 17,4 s
+medidos con el `F16` porque cada cuantización usa sus propios kernels. Sin
+calentamiento, ese costo lo pagaría el primer dictado del usuario.
+
+El calentamiento reusa `hardware::audio_de_referencia()` en vez de silencio, por
+la razón de siempre: la compuerta de energía RMS corta antes del modelo y un
+buffer de ceros no compilaría un solo shader.
+
+### Decisiones menores, con su costo
+
+- **Historial**: `%APPDATA%\com.mithdata.mithflow\history-nativo.jsonl`.
+  Deliberadamente distinto de `history.jsonl`, que sigue siendo de `mithflow.py`.
+  Hay un test que lo asegura.
+- **Tecla por defecto F9**, con la tabla de teclas admitidas y su índice
+  verificados por test, para que nadie mude el default reordenando la tabla.
+- **Íconos de bandeja dibujados en memoria** (círculos de 32 px con el borde
+  suavizado) en vez de seis PNG empaquetados: el juego de colores vive al lado
+  del `match` que lo elige, y hay un test de que ningún estado comparte color.
+- **`rodio` arrastra `cpal 0.17`** mientras el núcleo usa `cpal 0.16`: se
+  compilan las dos. Es tiempo de compilación, no un conflicto en ejecución
+  (entrada y salida son dispositivos distintos). La alternativa era escribir la
+  salida de audio a mano sobre el `cpal` del núcleo (~80 líneas con el `match`
+  de formatos), y no valía la pena por cuatro tonos.
+- **CSP explícita** en `tauri.conf.json` (`default-src 'self'`, sin `connect-src`
+  hacia afuera) y `capabilities` con `core:default` solamente. El historial es
+  texto dictado en claro: el webview no tiene por dónde sacarlo.
+- **El texto dictado nunca va a los logs**, sólo los tiempos.
+- **El autoarranque consulta el estado real antes de tocar el registro**:
+  `disable()` borra un valor y falla si no existe, así que llamarlo a ciegas en
+  cada arranque —el caso normal, porque viene apagado— tiraría un error espurio
+  todas las veces.
+
+### Ajustes: qué se aplica y qué queda pendiente
+
+| Ajuste | Persistido | Aplicado |
+|---|---|---|
+| tecla | ✅ | ✅ en caliente |
+| sonidos, volumen | ✅ | ✅ en caliente |
+| arranque con Windows | ✅ | ✅ |
+| modelo | ✅ | ✅ al reiniciar (se avisa) |
+| vocabulario | ✅ | ❌ |
+| muletillas | ✅ | ❌ |
+| modo de limpieza | ✅ | ❌ |
+
+**Los tres últimos necesitan parametrizar el núcleo**, que hoy los tiene como
+constantes: `config::INITIAL_PROMPT` y `config::FILLERS` se leen desde
+`stt::opciones_de_dictado` y `cleanup::fast_cleanup`, y `dictate()` decide la
+limpieza por su cuenta. Se dejaron sin tocar a propósito —el núcleo está cerrado
+y probado, y este plan era el cascarón— pero **es deuda real y no una mejora
+opcional**: un ajuste que se guarda y no hace nada es peor que no ofrecerlo. Son
+unas 30 líneas en tres archivos del núcleo más sus tests.
+
+### Estado del Plan 3
+
+**39 tests nuevos en la app + los 58 del núcleo = 97 pasando. Clippy limpio con
+`-D warnings` en los dos.**
+
+Verificado en ejecución: carga del modelo, calentamiento, bandeja, y el camino
+completo de IPC (React llamó a `leer_estado` y `leer_historial` y el backend
+respondió, o sea que la CSP no bloquea el webview y los comandos resuelven su
+estado manejado).
+
+**No se probó el dictado real** (necesita micrófono y foco): lo hace el usuario.
