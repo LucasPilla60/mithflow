@@ -57,9 +57,17 @@ winget install --id Kitware.CMake -e --accept-source-agreements --accept-package
 
 - [ ] **Paso 3: Rust**
 
+`winget` instala **rustup**, el gestor, pero deja la instalación **sin toolchain por defecto**: `rustc` falla con *"could not choose a version of rustc to run"*. Hay que instalarla explícitamente.
+
 ```powershell
 winget install --id Rustlang.Rustup -e --accept-source-agreements --accept-package-agreements
+# consola nueva, para que tome el PATH
+rustup toolchain install stable --profile default
+rustup default stable
 ```
+
+Si `rustc` responde *"Missing manifest in toolchain"*, la instalación quedó a medias (pasó al ejecutar este plan): reinstalarla limpia con
+`rustup toolchain uninstall stable; rustup toolchain install stable --profile default`.
 
 - [ ] **Paso 4: CUDA Toolkit — solo en la máquina con GPU NVIDIA**
 
