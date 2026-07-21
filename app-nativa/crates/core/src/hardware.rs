@@ -97,6 +97,14 @@ pub struct PerfilHardware {
     pub ram_total_gb: f32,
     /// Nombre del adaptador según `wgpu`, o `None` si no se enumeró ninguno.
     pub gpu_nombre: Option<String>,
+    /// Si la placa tiene memoria propia. Es el bit que decide si la RAM del
+    /// sistema acota el modelo ([`limitar_por_memoria`]), y por eso el asistente
+    /// de primer arranque lo necesita: es lo que le permite avisar "ese modelo
+    /// no te entra" ANTES de que el usuario espere una descarga de 1,5 GB.
+    pub gpu_dedicada: bool,
+    /// Cómo clasificó `wgpu` al adaptador ("dedicada", "integrada", "cpu"...),
+    /// o `None` si no se enumeró ninguno. Informativo.
+    pub gpu_clase: Option<&'static str>,
     /// El backend al que el motor ligó realmente el modelo ("vulkan", "cpu"...).
     /// Es lo que reporta el motor, no lo que se le pidió: la diferencia entre
     /// los dos ES la caída a CPU.
@@ -324,15 +332,14 @@ mod medicion {
         let backend = transcriber.backend();
         let factor_tiempo_real = medir_factor_tiempo_real(&mut transcriber)?;
 
-        let modelo_recomendado = elegir_modelo(
-            factor_tiempo_real,
-            ram_total_gb,
-            gpu.as_ref().is_some_and(|g| g.dedicada),
-        );
+        let gpu_dedicada = gpu.as_ref().is_some_and(|g| g.dedicada);
+        let modelo_recomendado = elegir_modelo(factor_tiempo_real, ram_total_gb, gpu_dedicada);
 
         Ok(PerfilHardware {
             ram_total_gb,
+            gpu_clase: gpu.as_ref().map(|g| g.clase),
             gpu_nombre: gpu.map(|g| g.nombre),
+            gpu_dedicada,
             backend,
             factor_tiempo_real,
             modelo_recomendado,

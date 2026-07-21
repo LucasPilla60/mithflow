@@ -15,6 +15,7 @@
 
 use crate::atajo;
 use mithflow_core::models::Modelo;
+use mithflow_core::{Limpieza, ModoLimpieza, Preferencias};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use tauri::{AppHandle, Runtime};
@@ -34,8 +35,27 @@ pub const MAX_MULETILLAS: usize = 100;
 /// Cómo se limpia el texto antes de pegarlo.
 pub const MODOS_LIMPIEZA: &[&str] = &["rapido", "ninguno"];
 
+/// Tope de grabación por defecto, en segundos.
+pub const LIMITE_GRABACION_POR_DEFECTO: u32 = mithflow_core::config::MAX_RECORDING_SECS as u32;
+
+/// Piso del tope de grabación. Menos de esto convertiría cualquier dictado
+/// normal en uno cortado por la mitad.
+pub const LIMITE_GRABACION_MINIMO: u32 = 15;
+
+/// Techo del tope de grabación. A 384 KB/s de buffer, diez minutos son 230 MB
+/// de audio en memoria: es un tope de seguridad, no una preferencia.
+pub const LIMITE_GRABACION_MAXIMO: u32 = 600;
+
 fn modo_limpieza_por_defecto() -> String {
     MODOS_LIMPIEZA[0].to_string()
+}
+
+fn limite_grabacion_por_defecto() -> u32 {
+    LIMITE_GRABACION_POR_DEFECTO
+}
+
+fn guardar_texto_por_defecto() -> bool {
+    true
 }
 
 fn tecla_por_defecto() -> String {
@@ -104,6 +124,16 @@ pub struct Ajustes {
     pub muletillas: Vec<String>,
     #[serde(default = "modo_limpieza_por_defecto")]
     pub modo_limpieza: String,
+    /// Segundos que puede durar una grabación antes de cortarse sola.
+    #[serde(default = "limite_grabacion_por_defecto")]
+    pub limite_grabacion_s: u32,
+    /// Si el historial guarda el texto dictado además de las métricas.
+    ///
+    /// El default es `true` —es lo que hace la app desde siempre y lo que hace
+    /// útil al historial—, pero se puede apagar: este archivo es lo único del
+    /// programa que deja en claro, en el disco, todo lo que el usuario dijo.
+    #[serde(default = "guardar_texto_por_defecto")]
+    pub guardar_texto: bool,
 }
 
 impl Default for Ajustes {
@@ -119,6 +149,8 @@ impl Default for Ajustes {
             vocabulario: String::new(),
             muletillas: muletillas_por_defecto(),
             modo_limpieza: modo_limpieza_por_defecto(),
+            limite_grabacion_s: limite_grabacion_por_defecto(),
+            guardar_texto: guardar_texto_por_defecto(),
         }
     }
 }
@@ -155,6 +187,32 @@ impl Ajustes {
 
         if !MODOS_LIMPIEZA.contains(&self.modo_limpieza.as_str()) {
             self.modo_limpieza = modo_limpieza_por_defecto();
+        }
+        self.limite_grabacion_s = self
+            .limite_grabacion_s
+            .clamp(LIMITE_GRABACION_MINIMO, LIMITE_GRABACION_MAXIMO);
+    }
+
+    /// El modo de limpieza como lo entiende el núcleo.
+    ///
+    /// Las claves del archivo están en español (`"rapido"`) y las del historial
+    /// en inglés (`"fast"`, que es lo que escribe `mithflow.py`): esta función
+    /// es el único lugar donde los dos vocabularios se tocan.
+    pub fn modo_limpieza(&self) -> ModoLimpieza {
+        if self.modo_limpieza == "ninguno" {
+            ModoLimpieza::Ninguno
+        } else {
+            ModoLimpieza::Rapido
+        }
+    }
+
+    /// Lo que el pipeline de dictado necesita saber. Compila los patrones de
+    /// las muletillas, así que se arma una vez por cambio de ajustes y no una
+    /// vez por dictado.
+    pub fn preferencias(&self) -> Preferencias {
+        Preferencias {
+            limpieza: Limpieza::nueva(self.modo_limpieza(), &self.muletillas),
+            guardar_texto: self.guardar_texto,
         }
     }
 }
@@ -216,6 +274,67 @@ mod tests {
         assert_eq!(a.volumen, 0.15);
         assert_eq!(a.modelo, "auto");
         assert_eq!(a.modo_limpieza, "rapido");
+        assert_eq!(a.limite_grabacion_s, 180);
+        assert!(a.guardar_texto, "el historial guarda el texto salvo que se apague");
+    }
+
+    /// El modo del archivo se traduce al del núcleo, y una basura cae en el
+    /// comportamiento normal en vez de dejar al usuario sin limpieza.
+    #[test]
+    fn el_modo_de_limpieza_se_traduce_al_del_nucleo() {
+        let rapido = Ajustes { modo_limpieza: "rapido".into(), ..Default::default() };
+        assert_eq!(rapido.modo_limpieza(), ModoLimpieza::Rapido);
+
+        let ninguno = Ajustes { modo_limpieza: "ninguno".into(), ..Default::default() };
+        assert_eq!(ninguno.modo_limpieza(), ModoLimpieza::Ninguno);
+
+        let raro = Ajustes { modo_limpieza: "vaya a saber".into(), ..Default::default() };
+        assert_eq!(raro.modo_limpieza(), ModoLimpieza::Rapido);
+    }
+
+    /// Los ajustes tienen que CONVERTIRSE en preferencias que el núcleo aplica.
+    /// Es el enganche que hacía falta para que vocabulario, muletillas y modo
+    /// dejaran de ser decorativos.
+    #[test]
+    fn los_ajustes_se_convierten_en_preferencias_que_el_nucleo_aplica() {
+        let a = Ajustes {
+            muletillas: vec!["ponele".into()],
+            modo_limpieza: "rapido".into(),
+            guardar_texto: false,
+            ..Default::default()
+        };
+        let p = a.preferencias();
+
+        assert!(!p.guardar_texto);
+        assert_eq!(
+            p.limpieza.aplicar("El informe, ponele, ya está."),
+            "El informe, ya está.",
+            "la muletilla configurada no se aplicó"
+        );
+
+        let sin_limpieza = Ajustes { modo_limpieza: "ninguno".into(), ..Default::default() };
+        assert_eq!(
+            sin_limpieza.preferencias().limpieza.aplicar("Eh, el el informe."),
+            "Eh, el el informe.",
+            "el modo ninguno tiene que dejar el crudo"
+        );
+    }
+
+    /// Un tope de grabación disparatado —o un archivo editado a mano— no puede
+    /// dejar el micrófono abierto diez minutos ni cortar a los dos segundos.
+    #[test]
+    fn normalizar_acota_el_limite_de_grabacion() {
+        let mut a = Ajustes { limite_grabacion_s: 0, ..Default::default() };
+        a.normalizar();
+        assert_eq!(a.limite_grabacion_s, LIMITE_GRABACION_MINIMO);
+
+        let mut a = Ajustes { limite_grabacion_s: u32::MAX, ..Default::default() };
+        a.normalizar();
+        assert_eq!(a.limite_grabacion_s, LIMITE_GRABACION_MAXIMO);
+
+        let mut a = Ajustes { limite_grabacion_s: 90, ..Default::default() };
+        a.normalizar();
+        assert_eq!(a.limite_grabacion_s, 90, "un valor razonable no se toca");
     }
 
     #[test]

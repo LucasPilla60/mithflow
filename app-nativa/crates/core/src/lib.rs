@@ -9,6 +9,7 @@ pub mod cleanup;
 pub mod config;
 pub mod hardware;
 pub mod history;
+pub mod metricas;
 pub mod models;
 pub mod paste;
 pub mod stt;
@@ -16,10 +17,37 @@ pub mod stt;
 use std::path::Path;
 use std::time::Instant;
 
-/// Valor del campo `mode` del historial. La limpieza por reglas reemplazó al
-/// LLM: el dashboard distingue las dos épocas por este campo, así que las
-/// entradas nuevas tienen que decir `"fast"` como las de `mithflow.py`.
-const MODO_LIMPIEZA: &str = "fast";
+pub use cleanup::{Limpieza, ModoLimpieza};
+
+/// Lo que el usuario configuró y el dictado tiene que respetar.
+///
+/// Existe para que [`dictate_con`] reciba **una** cosa y no cuatro sueltas, y
+/// para que agregar una preferencia mañana no cambie la firma otra vez. El
+/// vocabulario no está acá porque no lo usa el pipeline sino el motor
+/// ([`stt::Transcriber::fijar_vocabulario`]): es una opción de decodificación,
+/// no un paso de la limpieza.
+pub struct Preferencias {
+    pub limpieza: Limpieza,
+    /// Con `false`, el historial guarda las métricas del dictado pero **no el
+    /// texto**. Es la opción de privacidad: el historial es lo único de esta
+    /// app que guarda en claro todo lo que el usuario dijo, y esta app se
+    /// instala también en máquinas compartidas.
+    pub guardar_texto: bool,
+}
+
+impl Default for Preferencias {
+    /// Lo de siempre: limpieza rápida de fábrica y el texto guardado.
+    ///
+    /// **No se deriva a propósito.** `bool::default()` es `false`, así que un
+    /// `#[derive(Default)]` dejaría el historial sin texto para todo el que no
+    /// configure nada: el default silencioso opuesto al que la app promete.
+    fn default() -> Self {
+        Self {
+            limpieza: Limpieza::default(),
+            guardar_texto: true,
+        }
+    }
+}
 
 /// Lo único que el pipeline necesita del motor de transcripción.
 ///
@@ -55,6 +83,14 @@ pub struct DictationResult {
     pub audio_s: f32,
     pub transcribe_s: f32,
     pub cleanup_s: f32,
+    /// La entrada tal como quedó en el historial, o `None` si no se pudo
+    /// guardar.
+    ///
+    /// Se devuelve en vez de dejar que quien llame relea el archivo: releer un
+    /// `.jsonl` de miles de líneas después de cada dictado es trabajo O(n) por
+    /// dictado, y además con el texto sin guardar (`guardar_texto = false`) no
+    /// habría forma de reconocer cuál de las entradas es ésta.
+    pub entrada: Option<history::Entry>,
 }
 
 /// Redondea a 2 decimales, igual que `save_history` en la versión Python.
@@ -91,6 +127,41 @@ pub fn dictate(
     audio: &[f32],
     history_path: &Path,
 ) -> Result<Option<DictationResult>, String> {
+    dictate_con(transcriber, audio, history_path, &Preferencias::default())
+}
+
+/// El dictado respetando lo que el usuario configuró.
+///
+/// Es la misma función que [`dictate`], que no es más que ésta con las
+/// preferencias por defecto. Ver allá para el orden de las etapas y los
+/// errores.
+pub fn dictate_con(
+    transcriber: &mut impl Transcribe,
+    audio: &[f32],
+    history_path: &Path,
+    preferencias: &Preferencias,
+) -> Result<Option<DictationResult>, String> {
+    dictar_interno(transcriber, audio, history_path, preferencias, paste::paste)
+}
+
+/// El pipeline con el pegado inyectado.
+///
+/// Existe por la misma razón que el trait [`Transcribe`]: para poder probar las
+/// reglas sin el efecto. `paste::paste` escribe el portapapeles del usuario y
+/// **manda un Ctrl+V real a la ventana que tenga el foco**, así que un test que
+/// llegara hasta ahí le pegaría texto en medio de lo que esté haciendo. Con
+/// esta costura los tests ejercitan el pipeline entero con un pegado que no
+/// hace nada, y el código de producción sigue teniendo un solo camino.
+fn dictar_interno<P>(
+    transcriber: &mut impl Transcribe,
+    audio: &[f32],
+    history_path: &Path,
+    preferencias: &Preferencias,
+    pegar: P,
+) -> Result<Option<DictationResult>, String>
+where
+    P: FnOnce(&str) -> Result<(), String>,
+{
     let audio_s = audio.len() as f32 / config::SAMPLE_RATE as f32;
     if audio_s < config::MIN_AUDIO_SECS {
         return Ok(None);
@@ -105,15 +176,16 @@ pub fn dictate(
     }
 
     let t0 = Instant::now();
-    // `fast_cleanup` sólo devuelve vacío si la entrada era vacía (su red de
+    // La limpieza sólo devuelve vacío si la entrada era vacía (su red de
     // seguridad restituye el original cuando las reglas se comen más de la
-    // mitad), así que acá `final_text` nunca queda vacío.
-    let final_text = cleanup::fast_cleanup(&raw);
+    // mitad), y con el modo `ninguno` devuelve el crudo: acá `final_text` nunca
+    // queda vacío.
+    let final_text = preferencias.limpieza.aplicar(&raw);
     let cleanup_s = t0.elapsed().as_secs_f32();
 
-    let pegado = paste::paste(&final_text);
+    let pegado = pegar(&final_text);
 
-    let entrada = history::Entry {
+    let mut entrada = history::Entry {
         // Hora local sin zona, el mismo formato que `time.strftime` en Python:
         // el historial es un solo archivo compartido con el dashboard.
         ts: chrono::Local::now().format("%Y-%m-%dT%H:%M:%S").to_string(),
@@ -122,16 +194,28 @@ pub fn dictate(
         cleanup_s: redondear(cleanup_s),
         words: final_text.split_whitespace().count(),
         cleaned: final_text != raw,
-        mode: MODO_LIMPIEZA.to_string(),
+        mode: preferencias.limpieza.modo().etiqueta().to_string(),
         raw: raw.clone(),
         final_text: final_text.clone(),
     };
-    if let Err(e) = history::append(history_path, &entrada) {
-        eprintln!(
-            "no pude guardar el historial en {}: {e}",
-            history_path.display()
-        );
+    // Las métricas quedan; el texto no. Se vacía ACÁ y no antes para que
+    // `words` y `cleaned` sigan siendo los del dictado real: el dashboard tiene
+    // que poder seguir contando palabras aunque no guarde lo que se dijo.
+    if !preferencias.guardar_texto {
+        entrada.raw = String::new();
+        entrada.final_text = String::new();
     }
+
+    let guardada = match history::append(history_path, &entrada) {
+        Ok(()) => Some(entrada),
+        Err(e) => {
+            eprintln!(
+                "no pude guardar el historial en {}: {e}",
+                history_path.display()
+            );
+            None
+        }
+    };
 
     // Recién ahora: el historial se escribe aunque el pegado haya fallado.
     pegado?;
@@ -142,6 +226,7 @@ pub fn dictate(
         audio_s,
         transcribe_s,
         cleanup_s,
+        entrada: guardada,
     }))
 }
 
@@ -229,5 +314,168 @@ mod tests {
         assert_eq!(redondear(0.221_4), 0.22);
         assert_eq!(redondear(9.5), 9.5);
         assert_eq!(redondear(0.000_9), 0.0);
+    }
+
+    // ---- Preferencias del usuario (Plan 4) -------------------------------
+    //
+    // Ejercitan el pipeline COMPLETO —transcripción, limpieza, historial— con
+    // el pegado inyectado: `paste::paste` manda un Ctrl+V real a la ventana con
+    // foco, así que un `cargo test` que lo llamara le escribiría al usuario en
+    // medio de lo que esté haciendo.
+
+    /// Un pegado que no pega. Devuelve lo que le mandaron para poder afirmar
+    /// QUÉ se habría pegado, que es la mitad de lo que estos tests verifican.
+    fn pegado_falso(recibido: &std::cell::RefCell<String>) -> impl FnOnce(&str) -> Result<(), String> + '_ {
+        move |texto| {
+            recibido.borrow_mut().push_str(texto);
+            Ok(())
+        }
+    }
+
+    /// Doble que devuelve un texto crudo con muletilla y tartamudeo: sirve para
+    /// ver si la limpieza corrió o no.
+    struct ModeloQueDicta(&'static str);
+
+    impl Transcribe for ModeloQueDicta {
+        fn transcribe(&mut self, _audio: &[f32]) -> Result<String, String> {
+            Ok(self.0.to_string())
+        }
+    }
+
+    const CRUDO: &str = "Eh, quería ver el el dashboard.";
+    const LIMPIO: &str = "Quería ver el dashboard.";
+
+    fn audio_valido() -> Vec<f32> {
+        vec![0.1f32; config::SAMPLE_RATE as usize * 2]
+    }
+
+    /// El modo `ninguno` pega y guarda el texto CRUDO. Es el ajuste que hasta
+    /// el Plan 4 se guardaba y no hacía nada.
+    #[test]
+    fn el_modo_ninguno_deja_el_texto_crudo() {
+        let historial = ruta_temporal("modo_ninguno");
+        let preferencias = Preferencias {
+            limpieza: Limpieza::nueva(ModoLimpieza::Ninguno, config::FILLERS),
+            ..Default::default()
+        };
+        let pegado = std::cell::RefCell::new(String::new());
+
+        let resultado = dictar_interno(
+            &mut ModeloQueDicta(CRUDO),
+            &audio_valido(),
+            &historial,
+            &preferencias,
+            pegado_falso(&pegado),
+        )
+        .expect("el dictado no tenía que fallar")
+        .expect("con texto hay dictado");
+
+        assert_eq!(pegado.into_inner(), CRUDO, "se pegó texto limpiado");
+        assert_eq!(resultado.final_text, CRUDO, "el modo ninguno limpió igual");
+        let entrada = resultado.entrada.expect("tenía que guardarse");
+        assert_eq!(entrada.final_text, CRUDO);
+        assert!(!entrada.cleaned, "no hubo limpieza que declarar");
+        assert_eq!(entrada.mode, "none", "el historial tiene que decir qué modo fue");
+
+        std::fs::remove_file(&historial).ok();
+    }
+
+    /// Y el modo rápido —el default— sigue limpiando como siempre.
+    #[test]
+    fn el_modo_rapido_limpia_y_lo_registra() {
+        let historial = ruta_temporal("modo_rapido");
+        let pegado = std::cell::RefCell::new(String::new());
+
+        let resultado = dictar_interno(
+            &mut ModeloQueDicta(CRUDO),
+            &audio_valido(),
+            &historial,
+            &Preferencias::default(),
+            pegado_falso(&pegado),
+        )
+        .expect("el dictado no tenía que fallar")
+        .expect("con texto hay dictado");
+
+        assert_eq!(pegado.into_inner(), LIMPIO);
+        assert_eq!(resultado.final_text, LIMPIO);
+        let entrada = resultado.entrada.expect("tenía que guardarse");
+        assert!(entrada.cleaned);
+        assert_eq!(entrada.mode, "fast");
+        assert_eq!(entrada.words, 4);
+
+        std::fs::remove_file(&historial).ok();
+    }
+
+    /// Las muletillas del usuario se aplican de punta a punta, no sólo en el
+    /// módulo de limpieza.
+    #[test]
+    fn las_muletillas_propias_llegan_hasta_el_historial() {
+        let historial = ruta_temporal("muletillas_propias");
+        let preferencias = Preferencias {
+            limpieza: Limpieza::nueva(ModoLimpieza::Rapido, &["viste"]),
+            ..Default::default()
+        };
+        let pegado = std::cell::RefCell::new(String::new());
+
+        let resultado = dictar_interno(
+            &mut ModeloQueDicta("El informe, viste, ya está."),
+            &audio_valido(),
+            &historial,
+            &preferencias,
+            pegado_falso(&pegado),
+        )
+        .expect("el dictado no tenía que fallar")
+        .expect("con texto hay dictado");
+
+        assert_eq!(resultado.final_text, "El informe, ya está.");
+        assert_eq!(
+            resultado.entrada.expect("tenía que guardarse").final_text,
+            "El informe, ya está."
+        );
+        std::fs::remove_file(&historial).ok();
+    }
+
+    /// Con `guardar_texto = false` el historial conserva las métricas y pierde
+    /// el texto. Lo que se pega NO cambia: la privacidad es sobre lo que queda
+    /// escrito en el disco, no sobre el dictado.
+    #[test]
+    fn sin_guardar_texto_quedan_las_metricas_y_no_las_palabras() {
+        let historial = ruta_temporal("sin_texto");
+        let preferencias = Preferencias {
+            guardar_texto: false,
+            ..Default::default()
+        };
+        let pegado = std::cell::RefCell::new(String::new());
+
+        let resultado = dictar_interno(
+            &mut ModeloQueDicta(CRUDO),
+            &audio_valido(),
+            &historial,
+            &preferencias,
+            pegado_falso(&pegado),
+        )
+        .expect("el dictado no tenía que fallar")
+        .expect("con texto hay dictado");
+
+        assert_eq!(pegado.into_inner(), LIMPIO, "el pegado no se toca");
+        assert_eq!(resultado.final_text, LIMPIO);
+
+        let guardadas = history::load(&historial).expect("el historial tiene que leerse");
+        assert_eq!(guardadas.len(), 1);
+        assert_eq!(guardadas[0].final_text, "", "quedó el texto dictado en disco");
+        assert_eq!(guardadas[0].raw, "", "quedó el crudo en disco");
+        assert_eq!(guardadas[0].words, 4, "se perdieron las métricas");
+        assert!(guardadas[0].audio_s > 0.0);
+
+        std::fs::remove_file(&historial).ok();
+    }
+
+    /// El default no puede ser el que borra el texto: sería la peor sorpresa
+    /// posible para quien nunca abrió Ajustes.
+    #[test]
+    fn las_preferencias_por_defecto_guardan_el_texto() {
+        let preferencias = Preferencias::default();
+        assert!(preferencias.guardar_texto);
+        assert_eq!(preferencias.limpieza.modo(), ModoLimpieza::Rapido);
     }
 }

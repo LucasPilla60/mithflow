@@ -44,6 +44,21 @@ pub fn append(path: &Path, entry: &Entry) -> std::io::Result<()> {
     writeln!(f, "{}", serde_json::to_string(entry)?)
 }
 
+/// Borra el historial entero.
+///
+/// **Borra, no vacía**: dejar el archivo en cero bytes serviría igual, pero un
+/// archivo que no existe es una respuesta más clara a "¿queda algo de lo que
+/// dicté?". Que el archivo ya no esté NO es un error: borrar dos veces tiene
+/// que ser igual que borrar una, porque el botón está a un clic y el usuario no
+/// tiene por qué saber si había algo.
+pub fn clear(path: &Path) -> std::io::Result<()> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
 /// Saca el BOM UTF-8 (`EF BB BF`, que decodifica a U+FEFF) del principio del
 /// archivo. `mithflow.py` escribe sin BOM, pero `dashboard.py` lee con
 /// `utf-8-sig`, así que el proyecto ya asume que puede aparecer uno. Sin esto,
@@ -185,6 +200,24 @@ mod tests {
             "el BOM no debe hacer perder la primera entrada"
         );
         assert_eq!(entries[0].final_text, "primera");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Borrar el historial lo deja vacío, y borrar dos veces no es un error:
+    /// el botón está a un clic y no puede fallar por llegar tarde.
+    #[test]
+    fn borrar_el_historial_lo_vacia_y_es_idempotente() {
+        let dir = std::env::temp_dir().join(format!("mithflow_clear_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("h.jsonl");
+        std::fs::write(&path, "{\"ts\":\"2026-07-21T10:00:00\",\"final\":\"uno\"}\n").unwrap();
+        assert_eq!(load(&path).unwrap().len(), 1);
+
+        clear(&path).expect("borrar tiene que funcionar");
+        assert!(!path.exists(), "el archivo tiene que desaparecer");
+        assert!(load(&path).unwrap().is_empty(), "sin archivo, historial vacío");
+
+        clear(&path).expect("borrar de nuevo no puede fallar");
         std::fs::remove_dir_all(&dir).ok();
     }
 

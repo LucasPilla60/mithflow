@@ -137,8 +137,9 @@ mod motor {
     /// Las cuatro que se fijan acá no son preferencias, sostienen requisitos:
     /// - `language`: sin esto autodetecta, confunde el rioplatense con
     ///   portugués en clips cortos y paga la detección en cada dictado.
-    /// - `initial_prompt`: el vocabulario propio. Sin esto el modelo escribe
-    ///   "Middata" en vez de "MithData" (medido en el spike).
+    /// - `initial_prompt`: el vocabulario. Sin esto el modelo escribe "Middata"
+    ///   en vez de "MithData" (medido en el spike). Es el único parámetro,
+    ///   porque es el único que el usuario configura.
     /// - `no_speech_thold`: compuerta interna de whisper. Ayuda pero no basta
     ///   sola; ver la nota del módulo.
     /// - `condition_on_prev_tokens`: apagado, evita la degradación en audio
@@ -146,11 +147,11 @@ mod motor {
     ///
     /// El resto queda en el default del crate, que es lo que se midió en el
     /// spike (0.221 s sobre 9.5 s de audio con Vulkan).
-    fn opciones_de_dictado() -> RunOptions {
+    fn opciones_de_dictado(prompt: &str) -> RunOptions {
         RunOptions {
             language: Some(LANGUAGE.to_string()),
             family: Some(RunExtension::Whisper(WhisperRunOptions {
-                initial_prompt: Some(INITIAL_PROMPT.to_string()),
+                initial_prompt: Some(prompt.to_string()),
                 no_speech_thold: Some(super::NO_SPEECH_THOLD),
                 condition_on_prev_tokens: Some(false),
                 ..Default::default()
@@ -187,8 +188,18 @@ mod motor {
                 .map_err(|e| format!("no pude crear la sesión: {e}"))?;
             Ok(Self {
                 session,
-                opciones: opciones_de_dictado(),
+                opciones: opciones_de_dictado(INITIAL_PROMPT),
             })
+        }
+
+        /// Cambia el vocabulario propio **en caliente**, sin recargar el modelo.
+        ///
+        /// El `initial_prompt` es una opción de decodificación, no algo que
+        /// esté horneado en los pesos: se puede cambiar entre dictados y cuesta
+        /// una asignación. Por eso guardar Ajustes aplica el vocabulario nuevo
+        /// al dictado siguiente y no "la próxima vez que abras MithFlow".
+        pub fn fijar_vocabulario(&mut self, propio: &str) {
+            self.opciones = opciones_de_dictado(&crate::config::prompt_con_vocabulario(propio));
         }
 
         /// El backend al que el motor ligó realmente el modelo: `"vulkan"`,
@@ -226,6 +237,46 @@ mod motor {
         fn assert_send<T: Send>() {}
         let _ = assert_send::<Transcriber>;
     };
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        /// El prompt que se arma tiene que llegar al motor. Sin este test, el
+        /// vocabulario de Ajustes podría quedar guardado y jamás usarse —que es
+        /// exactamente el defecto que el Plan 4 vino a cerrar— y todo seguiría
+        /// compilando.
+        ///
+        /// No necesita el modelo: se inspecciona la estructura de opciones, que
+        /// es lo único que este código decide.
+        #[test]
+        fn el_vocabulario_del_usuario_llega_a_las_opciones_del_modelo() {
+            let opciones =
+                opciones_de_dictado(&crate::config::prompt_con_vocabulario("MithCore, pgTAP"));
+
+            assert_eq!(opciones.language.as_deref(), Some(LANGUAGE));
+            let Some(RunExtension::Whisper(whisper)) = &opciones.family else {
+                panic!("las opciones de dictado dejaron de ser de la familia whisper");
+            };
+            let prompt = whisper
+                .initial_prompt
+                .as_deref()
+                .expect("sin initial_prompt no hay vocabulario");
+            assert!(prompt.contains("MithCore"), "falta el término propio: {prompt}");
+            assert!(prompt.contains("MithData"), "se perdió el vocabulario de fábrica");
+            assert_eq!(whisper.condition_on_prev_tokens, Some(false));
+        }
+
+        /// Y sin vocabulario propio, exactamente el prompt de fábrica.
+        #[test]
+        fn sin_vocabulario_propio_se_usa_el_de_fabrica() {
+            let opciones = opciones_de_dictado(&crate::config::prompt_con_vocabulario(""));
+            let Some(RunExtension::Whisper(whisper)) = &opciones.family else {
+                panic!("las opciones de dictado dejaron de ser de la familia whisper");
+            };
+            assert_eq!(whisper.initial_prompt.as_deref(), Some(INITIAL_PROMPT));
+        }
+    }
 }
 
 #[cfg(test)]

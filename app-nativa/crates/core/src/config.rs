@@ -9,6 +9,22 @@ pub const INITIAL_PROMPT: &str = concat!(
 /// rioplatense con portugués en clips cortos y cuesta tiempo en cada dictado.
 pub const LANGUAGE: &str = "es";
 
+/// El vocabulario del usuario **se suma** al de fábrica, no lo reemplaza.
+///
+/// Es la diferencia entre un ajuste que ayuda y uno que rompe: quien escriba
+/// "Jaé, MithCore" en Ajustes quiere que el modelo aprenda esos dos términos,
+/// no perder "MithData", "CRM" y el resto de la lista que ya venía funcionando.
+/// Con la caja vacía —el caso de todo usuario que nunca la toque— devuelve
+/// exactamente [`INITIAL_PROMPT`], así que el comportamiento por defecto no
+/// cambia en un solo carácter.
+pub fn prompt_con_vocabulario(propio: &str) -> String {
+    let propio = propio.trim();
+    if propio.is_empty() {
+        return INITIAL_PROMPT.to_string();
+    }
+    format!("{INITIAL_PROMPT} También aparecen: {propio}")
+}
+
 /// Muletillas que se eliminan cuando quedaron aisladas por comas.
 /// Deliberadamente NO incluidas: "bueno", "nada", "a ver" — son muletillas
 /// frecuentes pero también arranques legítimos, y sacarlas cambia el tono.
@@ -63,3 +79,27 @@ pub const HALLUCINATION_PHRASES: &[&str] = &[
     "adios",
     "adiós",
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Sin vocabulario propio el prompt tiene que ser IDÉNTICO al de siempre:
+    /// es lo que garantiza que parametrizar esto no le cambie la transcripción
+    /// a quien nunca abra Ajustes.
+    #[test]
+    fn sin_vocabulario_propio_el_prompt_no_cambia() {
+        assert_eq!(prompt_con_vocabulario(""), INITIAL_PROMPT);
+        assert_eq!(prompt_con_vocabulario("   \n  "), INITIAL_PROMPT);
+    }
+
+    /// Y con vocabulario propio se SUMA: los términos de fábrica siguen ahí.
+    #[test]
+    fn el_vocabulario_propio_se_suma_al_de_fabrica() {
+        let prompt = prompt_con_vocabulario("MithCore, Jaé, pgTAP");
+        assert!(prompt.starts_with(INITIAL_PROMPT), "se perdió el prompt base");
+        assert!(prompt.contains("MithData"), "se perdió el vocabulario de fábrica");
+        assert!(prompt.contains("MithCore"));
+        assert!(prompt.contains("Jaé"));
+    }
+}

@@ -13,8 +13,10 @@
 //! La versión Python tenía ahí un bug real (dos funciones escribiendo el mismo
 //! buffer global); acá el compilador no deja escribirlo.
 
+use crate::ajustes::Ajustes;
 use crate::bandeja;
 use crate::estado::{Estado, EstadoCompartido, EstadoDto};
+use crate::motor::AlMotor;
 use crate::sonidos::{Sonidos, Tono};
 use crate::{atajo, eventos};
 use mithflow_core::audio::Recorder;
@@ -45,6 +47,13 @@ pub enum Mensaje {
     },
     /// No se pudo enganchar el teclado.
     AtajoRoto(String),
+    /// El usuario guardó Ajustes. El director aplica lo suyo (el tope de
+    /// grabación) y le reenvía al motor lo que es del dictado.
+    ///
+    /// Pasa por acá y no directo del comando al motor por la misma razón que
+    /// todo lo demás: el director es el único que le habla al motor, así que no
+    /// hay dos escritores compitiendo por esa cola.
+    Ajustados(Box<Ajustes>),
 }
 
 /// El extremo del canal, para guardarlo en el estado de Tauri.
@@ -72,9 +81,10 @@ impl AlDirector {
 pub fn lanzar(
     app: AppHandle,
     cola: Receiver<Mensaje>,
-    al_motor: Sender<Vec<f32>>,
+    al_motor: Sender<AlMotor>,
     espejo: Arc<EstadoCompartido>,
     sonidos: Sonidos,
+    limite_grabacion_s: f32,
 ) {
     let creado = std::thread::Builder::new()
         .name("mithflow-director".into())
@@ -87,6 +97,7 @@ pub fn lanzar(
                 al_motor,
                 espejo,
                 sonidos,
+                limite_grabacion_s,
             }
             .atender(cola)
         });
@@ -103,9 +114,11 @@ struct Director {
     /// presente es lo que cierra el micrófono al terminar: el indicador de
     /// Windows se apaga y en una notebook eso es batería.
     grabadora: Option<Recorder>,
-    al_motor: Sender<Vec<f32>>,
+    al_motor: Sender<AlMotor>,
     espejo: Arc<EstadoCompartido>,
     sonidos: Sonidos,
+    /// Tope de duración de una grabación, configurable desde Ajustes.
+    limite_grabacion_s: f32,
 }
 
 impl Director {
@@ -156,6 +169,7 @@ impl Director {
                 self.cambiar(Estado::Error(motivo));
             }
             Mensaje::Transcripcion { salida, entrada } => self.termino_de_transcribir(salida, entrada),
+            Mensaje::Ajustados(nuevos) => self.aplicar_ajustes(nuevos),
         }
     }
 
@@ -178,11 +192,23 @@ impl Director {
         }
     }
 
+    /// Aplica lo que es del director y le reenvía al motor lo que es del
+    /// dictado. El tope nuevo rige desde la grabación siguiente: cambiarlo en
+    /// medio de una ya empezada sería cortarle el dictado al usuario mientras
+    /// habla.
+    fn aplicar_ajustes(&mut self, nuevos: Box<Ajustes>) {
+        self.limite_grabacion_s = nuevos.limite_grabacion_s as f32;
+        if self.al_motor.send(AlMotor::Ajustes(nuevos)).is_err() {
+            eprintln!("el motor no está escuchando: los ajustes del dictado no se aplicaron");
+        }
+    }
+
     fn empezar_a_grabar(&mut self) {
         let mut grabadora = match Recorder::new() {
             Ok(g) => g,
             Err(e) => return self.avisar_error(&format!("No pude preparar el micrófono: {e}")),
         };
+        grabadora.fijar_tope(self.limite_grabacion_s);
         // El micrófono ocupado por otra aplicación entra por acá. Se informa y
         // se sigue en `Listo`: no cierra nada.
         if let Err(e) = grabadora.start() {
@@ -223,7 +249,7 @@ impl Director {
         }
 
         // Acá está la transición que importa: `audio` se MUEVE al motor.
-        if self.al_motor.send(audio).is_err() {
+        if self.al_motor.send(AlMotor::Audio(audio)).is_err() {
             self.avisar_error("El motor de transcripción no está disponible.");
             self.cambiar(Estado::Listo);
             return;
@@ -236,7 +262,7 @@ impl Director {
     /// hasta que alguien se dé cuenta.
     fn vigilar_tope(&mut self) {
         let pasados = self.grabadora.as_ref().map_or(0.0, Recorder::elapsed_secs);
-        if pasados >= config::MAX_RECORDING_SECS {
+        if pasados >= self.limite_grabacion_s {
             eventos::aviso(
                 &self.app,
                 "Llegué al máximo de grabación; transcribo lo que hay.",

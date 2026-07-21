@@ -29,6 +29,8 @@ tauri-plugin-single-instance = "2"
 tauri-plugin-autostart = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Para la fecha de hoy al calcular las métricas del dashboard ("+N hoy").
+chrono = "0.4"
 # `grab` (el que SUPRIME la tecla) está detrás de `unstable_grab`, y el crate no
 # habilita ninguna feature por defecto. Ver DECISIONES.md, hallazgo 3.
 rdev = { version = "0.5", features = ["unstable_grab"] }

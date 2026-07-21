@@ -70,6 +70,8 @@ fn main() {
             comandos::leer_ajustes,
             comandos::escribir_ajustes,
             comandos::leer_historial,
+            comandos::leer_metricas,
+            comandos::borrar_historial,
             comandos::leer_catalogo,
             comandos::pausar,
             comandos::reanudar,
@@ -128,9 +130,17 @@ fn preparar(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     handle.manage(AlDirector::nuevo(al_director.clone()));
     handle.manage(sonidos.clone());
 
+    let limite_grabacion_s = cfg.limite_grabacion_s as f32;
     let al_motor = arrancar_motor(&handle, &cfg, &al_director);
     atajo::lanzar(al_director.clone());
-    director::lanzar(handle.clone(), cola, al_motor, espejo, sonidos);
+    director::lanzar(
+        handle.clone(),
+        cola,
+        al_motor,
+        espejo,
+        sonidos,
+        limite_grabacion_s,
+    );
     Ok(())
 }
 
@@ -144,7 +154,7 @@ fn arrancar_motor(
     handle: &tauri::AppHandle,
     cfg: &ajustes::Ajustes,
     al_director: &mpsc::Sender<Mensaje>,
-) -> mpsc::Sender<Vec<f32>> {
+) -> mpsc::Sender<motor::AlMotor> {
     let historial = match rutas::historial(handle) {
         Ok(h) => h,
         Err(e) => return motor_ausente(al_director, e),
@@ -158,7 +168,7 @@ fn arrancar_motor(
                 eventos::aviso(handle, &aviso, "info");
             }
             println!("cargando el modelo {}…", ruta.display());
-            motor::lanzar(al_director.clone(), ruta, historial)
+            motor::lanzar(al_director.clone(), ruta, historial, cfg.clone())
         }
         Err(e) => motor_ausente(al_director, e),
     }
@@ -166,7 +176,10 @@ fn arrancar_motor(
 
 /// Un canal sin nadie del otro lado. Mandar audio ahí falla enseguida, que es
 /// exactamente lo que el director sabe informar.
-fn motor_ausente(al_director: &mpsc::Sender<Mensaje>, motivo: String) -> mpsc::Sender<Vec<f32>> {
+fn motor_ausente(
+    al_director: &mpsc::Sender<Mensaje>,
+    motivo: String,
+) -> mpsc::Sender<motor::AlMotor> {
     eprintln!("el motor no arranca: {motivo}");
     let _ = al_director.send(Mensaje::MotorListo(Err(motivo)));
     let (huerfano, _) = mpsc::channel();

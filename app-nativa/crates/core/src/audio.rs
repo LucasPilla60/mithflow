@@ -52,6 +52,11 @@ pub struct Recorder {
     stream: Option<cpal::Stream>,
     sample_rate: u32,
     channels: u16,
+    /// Tope de duración de la grabación, en segundos. Es un campo y no la
+    /// constante porque el usuario lo configura: quien dicta párrafos largos
+    /// necesita más de tres minutos, y quien sólo dicta frases prefiere que un
+    /// atajo apretado sin querer se corte antes.
+    tope_secs: f32,
 }
 
 impl Recorder {
@@ -61,7 +66,24 @@ impl Recorder {
             stream: None,
             sample_rate: crate::config::SAMPLE_RATE,
             channels: 1,
+            tope_secs: crate::config::MAX_RECORDING_SECS,
         })
+    }
+
+    /// Cambia el tope de duración. Un valor imposible (cero, negativo, `NaN`)
+    /// vuelve al de fábrica: dejar pasar un cero convertiría toda grabación en
+    /// un buffer vacío, o sea el dictado roto en silencio.
+    pub fn fijar_tope(&mut self, segundos: f32) {
+        self.tope_secs = if segundos.is_finite() && segundos > 0.0 {
+            segundos
+        } else {
+            crate::config::MAX_RECORDING_SECS
+        };
+    }
+
+    /// El tope vigente, en segundos.
+    pub fn tope_secs(&self) -> f32 {
+        self.tope_secs
     }
 
     pub fn start(&mut self) -> Result<(), String> {
@@ -138,8 +160,7 @@ impl Recorder {
         }
 
         // Tope de duración: recortar en vez de rechazar, para no perder lo ya dicho.
-        let maximo =
-            (crate::config::MAX_RECORDING_SECS * crate::config::SAMPLE_RATE as f32) as usize;
+        let maximo = (self.tope_secs * crate::config::SAMPLE_RATE as f32) as usize;
         if audio.len() > maximo {
             audio.truncate(maximo);
         }
@@ -214,6 +235,26 @@ mod tests {
         let rms = |v: &[f32]| (v.iter().map(|x| x * x).sum::<f32>() / v.len() as f32).sqrt();
         let (a, b) = (rms(&entrada), rms(&salida));
         assert!((a - b).abs() / a < 0.1, "RMS cambió demasiado: {a} -> {b}");
+    }
+
+    /// El tope arranca en el de fábrica, se puede mover, y un valor imposible
+    /// no puede dejar el dictado en cero muestras.
+    #[test]
+    fn el_tope_de_grabacion_es_configurable_y_falla_cerrado() {
+        let mut r = Recorder::new().expect("crear la grabadora no toca el hardware");
+        assert_eq!(r.tope_secs(), crate::config::MAX_RECORDING_SECS);
+
+        r.fijar_tope(45.0);
+        assert_eq!(r.tope_secs(), 45.0);
+
+        for imposible in [0.0, -10.0, f32::NAN, f32::INFINITY] {
+            r.fijar_tope(imposible);
+            assert_eq!(
+                r.tope_secs(),
+                crate::config::MAX_RECORDING_SECS,
+                "un tope de {imposible} tiene que caer en el de fábrica"
+            );
+        }
     }
 
     /// Diagnóstico: imprime la configuración nativa del micrófono de esta

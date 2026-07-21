@@ -10,14 +10,36 @@
 //!    pisar mientras esto transcribe. Es el bug real que tuvo la versión
 //!    Python, donde `process_recording` y `toggle` escribían los dos sobre el
 //!    mismo buffer global; en Rust lo resuelve el sistema de tipos, no un lock.
+//!
+//! # Por qué los ajustes viajan por el mismo canal que el audio
+//!
+//! Vocabulario, muletillas y modo de limpieza los aplica este hilo, que está
+//! bloqueado esperando audio. Mandarlos por otra vía obligaría a que alguien
+//! los escriba mientras acá se leen —o sea un lock en el camino del dictado—;
+//! por la misma cola llegan **ordenados** respecto de los dictados y sin
+//! sincronización de por medio. Un cambio guardado a mitad de una
+//! transcripción se aplica a la siguiente, que es exactamente lo que se espera.
 
+use crate::ajustes::Ajustes;
 use crate::director::Mensaje;
-use mithflow_core::{dictate, hardware, history, stt::Transcriber};
+use mithflow_core::{dictate_con, hardware, stt::Transcriber, Preferencias};
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Sender};
 use std::time::Instant;
 
-/// Arranca el motor y devuelve el extremo por donde mandarle audio.
+/// Lo que se le puede mandar al motor.
+pub enum AlMotor {
+    /// Audio mono de 16 kHz listo para transcribir.
+    Audio(Vec<f32>),
+    /// El usuario guardó Ajustes: hay preferencias nuevas que aplicar.
+    ///
+    /// Va en `Box` porque `Ajustes` es varias veces más grande que un `Vec`, y
+    /// el enum entero mide lo que su variante mayor: sin el `Box`, cada buffer
+    /// de audio que pasa por la cola arrastraría ese tamaño.
+    Ajustes(Box<Ajustes>),
+}
+
+/// Arranca el motor y devuelve el extremo por donde mandarle trabajo.
 ///
 /// Nunca falla acá: todo lo que pueda salir mal (el modelo no carga) viaja por
 /// `al_director` como [`Mensaje::MotorListo`], que es quien sabe convertirlo en
@@ -27,12 +49,13 @@ pub fn lanzar(
     al_director: Sender<Mensaje>,
     modelo: PathBuf,
     historial: PathBuf,
-) -> Sender<Vec<f32>> {
-    let (al_motor, cola) = mpsc::channel::<Vec<f32>>();
+    ajustes: Ajustes,
+) -> Sender<AlMotor> {
+    let (al_motor, cola) = mpsc::channel::<AlMotor>();
 
     let creado = std::thread::Builder::new()
         .name("mithflow-motor".into())
-        .spawn(move || trabajar(cola, al_director, modelo, historial));
+        .spawn(move || trabajar(cola, al_director, modelo, historial, ajustes));
     if let Err(e) = creado {
         eprintln!("no pude crear el hilo del motor: {e}");
     }
@@ -40,10 +63,11 @@ pub fn lanzar(
 }
 
 fn trabajar(
-    cola: mpsc::Receiver<Vec<f32>>,
+    cola: mpsc::Receiver<AlMotor>,
     al_director: Sender<Mensaje>,
     modelo: PathBuf,
     historial: PathBuf,
+    ajustes: Ajustes,
 ) {
     let mut transcriber = match Transcriber::new(&modelo) {
         Ok(t) => t,
@@ -55,6 +79,10 @@ fn trabajar(
             return;
         }
     };
+    // El vocabulario propio se aplica ANTES del calentamiento: así la primera
+    // inferencia real ya usa el prompt definitivo.
+    transcriber.fijar_vocabulario(&ajustes.vocabulario);
+    let mut preferencias = ajustes.preferencias();
 
     let backend = transcriber.backend();
     let calentamiento = calentar(&mut transcriber);
@@ -63,21 +91,43 @@ fn trabajar(
     ))));
 
     // El `for` termina cuando el director suelta su extremo, o sea al cerrar.
-    for audio in cola {
-        let salida = dictate(&mut transcriber, &audio, &historial);
-        let entrada = match &salida {
-            // Se relee del archivo en vez de reconstruirla: así lo que ve el
-            // dashboard es exactamente lo que quedó persistido, incluida la
-            // marca de tiempo que puso `dictate`. La comparación del texto
-            // evita mandar una entrada vieja si el guardado falló.
-            Ok(Some(resultado)) => ultima_entrada(&historial)
-                .filter(|e| e.final_text == resultado.final_text),
-            _ => None,
-        };
-        if al_director.send(Mensaje::Transcripcion { salida, entrada }).is_err() {
-            return; // el director se fue; no hay a quién contarle
+    for trabajo in cola {
+        match trabajo {
+            AlMotor::Ajustes(nuevos) => {
+                transcriber.fijar_vocabulario(&nuevos.vocabulario);
+                preferencias = nuevos.preferencias();
+            }
+            AlMotor::Audio(audio) => {
+                if dictar(&mut transcriber, &audio, &historial, &preferencias, &al_director)
+                    .is_err()
+                {
+                    return; // el director se fue; no hay a quién contarle
+                }
+            }
         }
     }
+}
+
+/// Un dictado y su informe al director. `Err(())` significa que el director ya
+/// no está escuchando.
+fn dictar(
+    transcriber: &mut Transcriber,
+    audio: &[f32],
+    historial: &std::path::Path,
+    preferencias: &Preferencias,
+    al_director: &Sender<Mensaje>,
+) -> Result<(), ()> {
+    let salida = dictate_con(transcriber, audio, historial, preferencias);
+    // La entrada viene del propio pipeline, que es quien la escribió: releer el
+    // archivo para buscarla sería O(n) por dictado y, con el texto sin guardar,
+    // no habría por dónde reconocerla.
+    let entrada = match &salida {
+        Ok(Some(resultado)) => resultado.entrada.clone(),
+        _ => None,
+    };
+    al_director
+        .send(Mensaje::Transcripcion { salida, entrada })
+        .map_err(|_| ())
 }
 
 /// Paga por adelantado la compilación de los shaders de Vulkan.
@@ -95,20 +145,5 @@ fn calentar(transcriber: &mut Transcriber) -> String {
     match transcriber.transcribe(&hardware::audio_de_referencia()) {
         Ok(_) => format!("calentado en {:.1} s", t0.elapsed().as_secs_f32()),
         Err(e) => format!("sin calentar: {e}; el primer dictado va a tardar más"),
-    }
-}
-
-/// La última entrada del historial, o `None` si no se pudo leer.
-///
-/// Un fallo acá no puede romper nada: el dashboard igual carga el historial
-/// entero al montarse, así que lo peor que pasa es que una fila aparezca recién
-/// al refrescar.
-fn ultima_entrada(historial: &std::path::Path) -> Option<history::Entry> {
-    match history::load(historial) {
-        Ok(entradas) => entradas.into_iter().next_back(),
-        Err(e) => {
-            eprintln!("no pude releer el historial {}: {e}", historial.display());
-            None
-        }
     }
 }
