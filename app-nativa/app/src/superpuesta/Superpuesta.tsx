@@ -17,6 +17,18 @@
  * "Transcribiendo…" en ámbar. Ese segundo o dos, en blanco, se ve igual que un
  * dictado que se perdió.
  *
+ * # Se agarra con el mouse
+ *
+ * Toda la tarjeta es el asa: apretar y mover la corre, y ahí se queda entre
+ * dictados y entre reinicios. Antes los clics la atravesaban
+ * (`WS_EX_TRANSPARENT`) y era imposible agarrarla; se sacó ese estilo después de
+ * medir en `spike-superpuesta/` que **no** es el que sostiene la garantía del
+ * foco —ésa la da `WS_EX_NOACTIVATE`, que sigue puesta—, así que clickearla no
+ * mueve el cursor de texto del usuario.
+ *
+ * El arrastre no arranca en el `mousedown` sino cuando el mouse **se movió** con
+ * el botón apretado: ver [`agarrar`].
+ *
  * # Por qué el medidor no pasa por React
  *
  * Llegan veinticinco cuadros por segundo y hay treinta barras: re-renderizar la
@@ -26,6 +38,7 @@
  * modo, si hay voz y el reloj, que cambia una vez por segundo.
  */
 import { useEffect, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import "./superpuesta.css";
 
@@ -46,8 +59,15 @@ interface EstadoDto {
   estado: string;
 }
 
-/** Cuántas barras tiene el medidor. */
-const BARRAS = 30;
+/**
+ * Cuántas barras tiene el medidor.
+ *
+ * Eran 30 cuando la ventanita medía 232 px de ancho. Con 168 px, 30 barras
+ * quedarían de 3 px y el medidor se leería como una textura en vez de como una
+ * onda: veinte barras de ~5,5 px dicen lo mismo y se ven. A 25 cuadros por
+ * segundo son 0,8 s de historia, suficiente para ver la cadencia del habla.
+ */
+const BARRAS = 20;
 
 /**
  * Altura mínima de una barra, como fracción de su alto. No es decoración: con
@@ -69,6 +89,67 @@ function reloj(segundos: number): string {
   const total = Number.isFinite(segundos) ? Math.max(0, Math.floor(segundos)) : 0;
   const minutos = Math.floor(total / 60);
   return `${minutos}:${String(total % 60).padStart(2, "0")}`;
+}
+
+/**
+ * Cuántos píxeles hay que mover el mouse, con el botón apretado, para que esto
+ * cuente como un arrastre y no como un clic.
+ */
+const UMBRAL_DE_ARRASTRE = 3;
+
+/**
+ * Agarrar la ventanita para moverla.
+ *
+ * # Por qué no arranca en el `mousedown`
+ *
+ * El arrastre lo hace el bucle modal de movimiento de Windows, que **termina
+ * con el `WM_LBUTTONUP`**. Si se lo lanzara en el `mousedown`, un clic corto
+ * —el caso más probable de todos, porque desde que los clics no la atraviesan
+ * el usuario va a intentar apretar cosas que la ventanita tapa— podría terminar
+ * *antes* de que el bucle arranque: entonces el `up` ya pasó, nunca llega otro,
+ * y la ventanita queda pegada al mouse paseando por la pantalla hasta el
+ * próximo clic. Con el umbral, un clic sin movimiento no arrastra nada y cuando
+ * el arrastre arranca el botón está garantizadamente apretado.
+ *
+ * De paso, un clic que no mueve nada tampoco le hace creer al backend que el
+ * usuario eligió una posición.
+ *
+ * # Un solo viaje de ida
+ *
+ * `arrastrar_indicador` hace todo del lado de Rust: anota que el arrastre es
+ * del usuario, corre el bucle modal y guarda dónde quedó. No devuelve hasta que
+ * se suelta el botón, así que la promesa se resuelve recién ahí.
+ *
+ * Si algo falla no hay nada que hacer salvo dejarla quieta: es el mismo estado
+ * que tenía la versión anterior de la app y el dictado no depende de esto. Se
+ * anota en la consola porque un arrastre que no anda es un defecto silencioso.
+ * En la vista de desarrollo (un navegador común, sin IPC) falla siempre y por
+ * eso no se le muestra nada al usuario.
+ */
+function agarrar(evento: React.MouseEvent<HTMLElement>): void {
+  if (evento.button !== 0) return;
+  const desde = { x: evento.screenX, y: evento.screenY };
+
+  const soltar = () => {
+    window.removeEventListener("mousemove", alMover);
+    window.removeEventListener("mouseup", soltar);
+  };
+
+  const alMover = (movimiento: MouseEvent) => {
+    const corrido =
+      Math.abs(movimiento.screenX - desde.x) >= UMBRAL_DE_ARRASTRE ||
+      Math.abs(movimiento.screenY - desde.y) >= UMBRAL_DE_ARRASTRE;
+    if (!corrido) return;
+    // Antes de arrastrar, porque el bucle modal se come el `mouseup` y este
+    // handler no volvería a correr nunca.
+    soltar();
+    invoke("arrastrar_indicador").catch((error) => {
+      console.warn("no pude arrastrar la ventanita:", error);
+    });
+  };
+
+  window.addEventListener("mousemove", alMover);
+  window.addEventListener("mouseup", soltar);
 }
 
 export default function Superpuesta() {
@@ -136,7 +217,14 @@ export default function Superpuesta() {
   const transcribiendo = modo === "transcribiendo";
 
   return (
-    <div className="tarjeta" data-modo={modo} role="status" aria-live="off">
+    <div
+      className="tarjeta"
+      data-modo={modo}
+      role="status"
+      aria-live="off"
+      title="Arrastrala para moverla"
+      onMouseDown={agarrar}
+    >
       <div className="fila">
         <span className="punto" />
         <span className="rotulo">{transcribiendo ? "Transcribiendo…" : "Grabando"}</span>

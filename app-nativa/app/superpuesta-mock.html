@@ -9,6 +9,7 @@
   entra al `dist/` que lleva Tauri.
 
   Escenarios: ?escenario=hablando | silencio | transcribiendo | cerca-del-tope
+  Tamaño:     ?ancho=232&alto=64  (para comparar contra el de una versión vieja)
 -->
 <html lang="es">
   <head>
@@ -16,7 +17,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>MithFlow — indicador (simulado)</title>
     <style>
-      /* La ventana real mide 232x64 y es transparente. Acá se dibuja sobre un
+      /* La ventana real mide 168x48 y es transparente. Acá se dibuja sobre un
          fondo cualquiera y a ese tamaño exacto, para que la captura muestre lo
          que se va a ver de verdad y no una versión estirada. */
       body {
@@ -27,14 +28,28 @@
         background: #202531;
       }
       #root {
-        width: 232px;
-        height: 64px;
+        width: 168px;
+        height: 48px;
       }
     </style>
   </head>
 
   <body>
     <div id="root"></div>
+    <script>
+      // El tamaño se puede pedir por la URL para poder poner al lado la
+      // ventanita de la versión anterior (232x64) y ver cuánto se achicó. Se
+      // acota a algo dibujable: es una herramienta de desarrollo, pero un NaN
+      // en un `style` deja la captura en blanco sin decir por qué.
+      const parametros = new URLSearchParams(location.search);
+      const medida = (nombre, porDefecto) => {
+        const pedida = Number(parametros.get(nombre));
+        return Number.isFinite(pedida) && pedida >= 40 && pedida <= 800 ? pedida : porDefecto;
+      };
+      const raiz = document.getElementById("root");
+      raiz.style.width = `${medida("ancho", 168)}px`;
+      raiz.style.height = `${medida("alto", 48)}px`;
+    </script>
     <script type="module" src="/src/desarrollo/superpuesta.tsx"></script>
   </body>
 </html>

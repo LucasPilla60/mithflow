@@ -241,6 +241,23 @@ export const alternarPausa = () => invoke<void>("alternar_pausa");
 /** Vuelve enseguida: el resultado llega por `perfilado-listo` (~20 s). */
 export const perfilarHardware = () => invoke<void>("perfilar_hardware");
 
+/**
+ * ¿El usuario movió la ventanita de grabación arrastrándola?
+ *
+ * Ajustes lo necesita para saber si el botón de volver a la posición de fábrica
+ * tiene algo que hacer. La posición en sí no viaja al frontend: son coordenadas
+ * de pantalla que nadie escribe a mano, y quien decide dónde entra la ventanita
+ * es el backend.
+ *
+ * (El arrastre en sí lo pide la propia ventanita con `arrastrar_indicador`; no
+ * está acá porque esta pantalla no lo usa nunca.)
+ */
+export const indicadorMovido = () => invoke<boolean>("indicador_movido");
+
+/** Olvida la posición arrastrada: vuelve a la esquina elegida en Ajustes. */
+export const restablecerPosicionIndicador = () =>
+  invoke<void>("restablecer_posicion_indicador");
+
 /** Vuelve enseguida: el avance llega por `progreso-descarga`. */
 export const descargarModelo = (clave: string) =>
   invoke<void>("descargar_modelo", { clave });

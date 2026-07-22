@@ -94,6 +94,9 @@ fn main() {
             comandos::alternar_pausa,
             comandos::perfilar_hardware,
             comandos::descargar_modelo,
+            comandos::arrastrar_indicador,
+            comandos::indicador_movido,
+            comandos::restablecer_posicion_indicador,
             desinstalar::resumen_desinstalacion,
             desinstalar::desinstalar,
             actualizador::leer_actualizacion,
@@ -117,6 +120,14 @@ fn main() {
                 if let Err(e) = ventana.hide() {
                     eprintln!("no pude esconder la ventana: {e}");
                 }
+            }
+            // Dónde dejó el usuario la ventanita de grabación. Sólo cuenta
+            // mientras la tenga agarrada con el mouse: acá también llegan los
+            // movimientos que hace el propio programa. Ver `superpuesta`.
+            if let (superpuesta::ETIQUETA, WindowEvent::Moved(posicion)) =
+                (ventana.label(), evento)
+            {
+                superpuesta::anotar_movimiento(*posicion);
             }
         })
         .run(tauri::generate_context!())

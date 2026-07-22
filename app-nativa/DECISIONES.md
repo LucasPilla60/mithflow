@@ -1473,6 +1473,10 @@ Las capturas de los cuatro estados están en `docs/capturas/`, sacadas con
 - **Arrastrar la ventanita con el mouse.** Sería incompatible con
   `WS_EX_TRANSPARENT`, que es lo que hace que los clics lleguen a lo que hay
   debajo. Se elige la esquina desde Ajustes.
+  > **Revertido en el Plan 9.** Es cierto que es incompatible con
+  > `WS_EX_TRANSPARENT` — y ése resultó ser el punto: `WS_EX_TRANSPARENT` **no**
+  > es lo que sostiene la garantía del foco, así que se lo pudo sacar. Se midió
+  > con el spike antes de tocar nada.
 
 ### Verificación
 
@@ -1799,3 +1803,305 @@ errores en líneas que no tienen nada malo.
 - **No se arrancó la app** ni se creó nada en GitHub. Las capturas salen del
   backend simulado en el navegador (`mock.html?escenario=actualizacion`), que se
   extendió con los tres comandos nuevos.
+
+## Plan 9 — la ventanita chica y movible, y el repositorio (22/7/2026)
+
+### El pedido, con las palabras del usuario
+
+> "El iconito que graba aparece perfecto, se ilumina cada vez que hablo y queda
+> gris cuando no hablo. Pero la ventanita de grabación es bastante grande, y no
+> la puedo mover con el mouse: si quiero moverla para leer algo que está abajo,
+> no puedo."
+
+Y aparte: *"acordate de ir aumentando las versiones, porque seguimos en 1.0.0 y
+ya van varias actualizaciones"*.
+
+### El hallazgo: `WS_EX_TRANSPARENT` y `WS_EX_NOACTIVATE` no son lo mismo
+
+La 1.0 cerraba la garantía del foco por cuatro vías y una de ellas era
+`set_ignore_cursor_events(true)` (`WS_EX_TRANSPARENT`), que hace que los clics
+**atraviesen** la ventanita. El Plan 6 anotó "arrastrar la ventanita" en «lo que
+NO se hizo» diciendo que *"sería incompatible con `WS_EX_TRANSPARENT`"*. Eso es
+cierto y es exactamente el punto: **`WS_EX_TRANSPARENT` no es lo que sostiene la
+garantía del foco.** Esa la da `WS_EX_NOACTIVATE`, que es una propiedad
+distinta:
+
+| Estilo | De dónde sale | Qué decide |
+|---|---|---|
+| `WS_EX_TRANSPARENT` | `set_ignore_cursor_events(true)` | si el clic **llega** a la ventana |
+| `WS_EX_NOACTIVATE` | `focusable(false)` | si el clic **activa** la ventana |
+
+O sea: en principio se puede tener una ventana que recibe clics para arrastrarla
+y aun así no roba el foco. **En principio.** Lo que sigue es cómo se comprobó,
+porque de esto depende que el dictado no termine pegado en otro lado.
+
+### Cómo se midió (`spike-superpuesta`, extendido)
+
+El spike del Plan 6 ya medía el foco con Win32 sobre la misma versión de `tao`
+que usa Tauri. Se lo extendió para que además **haga clic de verdad** sobre la
+ventanita y mire qué pasa. Tres decisiones de método, y ninguna es adorno:
+
+1. **`SendInput` y no `PostMessage(WM_LBUTTONDOWN)`.** Un mensaje posteado se
+   saltea el `WM_MOUSEACTIVATE`, que es justamente el que decide si la ventana
+   se activa. Probar con mensajes inyectados habría dado un PASA que no
+   significa nada.
+2. **Un testigo que SÍ tiene que robar el foco** (una ventana sin
+   `WS_EX_NOACTIVATE`). Sin él, un "el foco no se movió" podría querer decir
+   simplemente que el clic nunca ocurrió. El testigo prueba que el aparato de
+   medición detecta un robo de foco cuando lo hay.
+3. **Una ventana "blanco" abajo de todo.** Con `WS_EX_TRANSPARENT` el clic
+   atraviesa la ventanita y aterriza en lo que haya debajo — que en esta máquina
+   es la aplicación del usuario. Clickear a ciegas ahí sería apretarle un botón
+   cualquiera. La ventana blanco es propia, opaca y también `NOACTIVATE`: el
+   clic que pasa de largo cae ahí, y de paso ésa es la medición **directa** de
+   que pasó de largo.
+
+Resultado, con el foco en el navegador del usuario:
+
+```text
+ventana enfocada al arrancar: «(2) WhatsApp Business - Brave» (0x2045e)
+foco de teclado / cursor de texto de ese hilo: (132190, 0)
+
+configuración                                     GWL_EXSTYLE clic→vent. clic→abajo  foco ok
+A — la de hoy (NOACTIVATE + TRANSPARENT)           0x080c0138         no         sí       sí
+B — la propuesta (NOACTIVATE, sin TRANSPARENT)     0x08040118         sí         no       sí
+C — testigo (sin NOACTIVATE, sin TRANSPARENT)      0x00040118         sí         no       no
+
+PASA  el foco no se movió tras «hide»
+PASA  el foco no se movió tras «SEGUNDO show (el que usa SW_SHOW)»
+PASA  arrastrarla (drag_window, lo mismo que startDragging) no mueve el foco
+PASA  al arrastrarla se movió y avisó con `Moved`
+      (1 eventos Moved; (872, 516) -> (912, 540))
+PASA  B: la ventanita no tiene el foco de teclado
+```
+
+`GetForegroundWindow` y el `hwndFocus` del hilo de la otra aplicación
+(`GetGUIThreadInfo`, que es donde vive el cursor de texto) **no se movieron** en
+la configuración B ni siquiera durante el bucle modal de arrastre. En la C —la
+misma ventana sin `WS_EX_NOACTIVATE`— el primer plano pasó a ser la del spike.
+
+La última comprobación no es un extra: **todo el recuerdo de la posición vive de
+ese `Moved`**. Si `tao` no lo emitiera durante el bucle modal —o lo emitiera sólo
+al soltar—, la ventanita se movería y no se acordaría de nada. Se movió los
+exactos 40x24 px que se corrió el mouse, y avisó.
+
+**Conclusión: se puede hacer arrastrable.** El costo real y aceptado es el otro
+lado de la moneda: los clics ya no la atraviesan, así que mientras esté encima
+de un botón ese botón no se puede apretar. Por eso ahora es chica **y** movible;
+las dos mitades del pedido son la misma decisión.
+
+Detalle del arrastre: se probó `drag_window()` de `tao`, que es exactamente lo
+que hace `startDragging()` de Tauri (`ReleaseCapture` + `WM_NCLBUTTONDOWN` con
+`HTCAPTION`). Entra en el bucle modal de movimiento del sistema, así que el
+botón lo suelta un hilo aparte y **varias veces**: soltarlo desde el mismo hilo
+sería un abrazo mortal con el mouse del usuario apretado.
+
+### El tamaño: 232x64 → 168x48
+
+**46 % menos superficie**, con el medidor bajando de ~25 px de alto a ~21. Lo
+que no se podía tocar era la razón de ser del medidor —distinguir de un vistazo
+"te escucho" de "estoy grabando silencio"— y esa diferencia la lleva sobre todo
+**el color**, no la altura: teal contra gris se lee igual en 21 px que en 25.
+
+Lo que sí cambió por el ancho: **30 barras → 20**. A 168 px, treinta barras
+quedan de 3 px y el medidor se lee como una textura en vez de como una onda;
+veinte de ~5,5 px dicen lo mismo y se ven. Son 0,8 s de historia en vez de 1,2,
+suficiente para ver la cadencia del habla.
+
+Hay un test que lo sostiene: la ventanita tiene que tapar **menos del 0,5 %** de
+una pantalla Full HD. Con 232x64 tapaba el 0,74 % y ese test falla. No es
+estética: desde que se come los clics, agrandarla tiene un costo concreto.
+
+La comparación está en `docs/capturas/indicador-antes-y-despues.png`, con las
+dos a la misma escala. La vieja se capturó sacando el componente y el CSS de
+git, no dibujando una aproximación.
+
+### La posición que el usuario elige, y los tres modos de perderla
+
+Arrastrarla la deja donde la soltó: **entre dictados y entre reinicios**, y en
+el monitor donde la haya dejado. Mientras haya una posición arrastrada, manda
+ella y no el desplegable de Ajustes ni el seguimiento del mouse entre pantallas:
+elegir a mano y que la aplicación te lo pise es peor que no poder elegir. En
+Ajustes hay un botón para volver a la de fábrica, que devuelve las dos cosas.
+
+Cuatro formas de que eso saliera mal, y cómo se cierra cada una:
+
+- **Guardarla no siendo el usuario quien la movió.** La ventana informa `Moved`
+  también cuando la ubica el propio programa y cuando Windows la reacomoda sola
+  al cruzar a un monitor con otro factor de escala. Si eso se guardara como "acá
+  la quiere el usuario", la ventanita dejaría de seguir al mouse entre pantallas
+  sin que nadie lo pidiera. Se cierra con una bandera que está armada
+  **exactamente** mientras corre el bucle modal de arrastre, y sin ella un
+  `Moved` no cuenta. Comparar contra "la última posición que fijamos nosotros"
+  no alcanzaba: el reacomodo por DPI llega después y con otro número.
+- **Escribir el disco en cada píxel.** Durante un arrastre llegan decenas de
+  `Moved` por segundo. Se anota en memoria y se vuelca **al soltar el botón**,
+  o sea una vez por arrastre. También al esconder o destruir la ventanita, como
+  red: apagar el indicador en medio de un arrastre no puede tirar lo que eligió.
+- **Que quede fuera de pantalla.** Es `superpuesta::acomodar`, función pura y
+  con diez tests, que distingue dos casos que no son el mismo: si **el monitor
+  ya no está** (la notebook se desenchufó) la posición se descarta y manda la de
+  fábrica, porque respetarla dejaría la ventanita invisible y sin forma de
+  recuperarla salvo editando `ajustes.json` a mano; si **el monitor está pero
+  quedó colgando del borde** su elección se respeta y sólo se la mete adentro,
+  porque descartarla sería moverla de pantalla por un par de píxeles. El
+  criterio de "en qué pantalla está" es **el centro** de la ventanita y no una
+  esquina, y elegida la pantalla entra entera: una ventanita partida entre dos
+  monitores es justo el caso en que el medidor deja de leerse de un vistazo.
+- **Descartar una posición que se ve perfectamente.** `acomodar` mide contra el
+  **monitor entero**, no contra su área de trabajo. La diferencia son los ~40 px
+  de la barra de tareas y la encontró la auditoría: la ventanita está siempre
+  por encima de todo, así que soltarla sobre la barra de tareas —que es justo
+  donde uno la manda para sacársela de encima— la deja perfectamente visible.
+  Midiendo contra el área de trabajo, cualquier `y ≥ 1016` en una pantalla Full
+  HD se descartaba como "fuera de pantalla" y la ventanita volvía sola al centro
+  en el dictado siguiente, mientras Ajustes seguía diciendo "manda dónde la
+  dejaste con el mouse". La posición **de fábrica** sí se calcula sobre el área
+  de trabajo: ahí no hay nadie eligiendo, y taparle la barra de tareas a quien
+  no lo pidió sería de mal gusto.
+
+### Dónde vive la posición, y por qué no en `Ajustes`
+
+En `ajustes.json`, con claves propias (`indicador_x` / `indicador_y`), pero
+**fuera de `ajustes::Ajustes`**. No es algo que el usuario elija en un
+formulario sino dónde dejó una ventana, y mezclarlas tenía un costo concreto:
+guardar Ajustes escribiría la posición que el formulario leyó al abrirse,
+**pisando la que el usuario eligió arrastrando la ventanita mientras tanto**.
+`ajustes::guardar` sólo escribe los campos de su struct y `ajustes::cargar`
+ignora lo que no conoce, así que las dos mitades conviven sin tocarse. Por lo
+mismo el botón de restablecer va por su propio comando y no por "Guardar".
+
+Y como todo lo que sale de ese archivo: **nada se cree sin revisar**. Un valor
+que no sea un entero de 32 bits se descarta y la ventanita vuelve a la posición
+de fábrica.
+
+### La capability: **cero** permisos nuevos, y por qué
+
+La primera versión le daba a la ventanita `core:window:allow-start-dragging`
+para poder llamar a `startDragging()` desde el JavaScript. La auditoría lo
+desarmó leyendo el código de Tauri: ese comando es
+`start_dragging(window, label: Option<String>)` y `get_window`
+(`tauri/src/window/plugin.rs`) resuelve **cualquier** etiqueta contra el
+manager. El `"windows": ["superpuesta"]` de la capability elige **qué webview
+tiene el permiso**, no **qué ventana puede tocar**: dárselo al webview que está
+siempre por encima de todo alcanzaba también a la principal.
+
+Así que el arrastre lo hace Rust (`comandos::arrastrar_indicador`), donde no hay
+ACL de por medio y el alcance es exactamente esta ventana. La capability vuelve
+a ser sólo `core:event:default` y el bundle de la ventanita baja de 14,8 kB a
+**2,1 kB**, porque ya no importa `@tauri-apps/api/window`.
+
+Lo que `core:event:default` **sí** implica, y quedó anotado en la propia
+capability: `tauri-plugin-store` emite `store://change` a todos los webviews en
+cada `set`, así que esta ventana recibe cada clave y valor de `ajustes.json`.
+Hoy no importa —carga sólo `superpuesta.html` del bundle, sin contenido remoto
+y con `connect-src 'self'`— pero es la razón por la que ahí no puede vivir
+ningún secreto.
+
+### El arrastre arranca cuando el mouse se mueve, no en el `mousedown`
+
+Otro hallazgo de la auditoría, y de los que muerden fuerte. El arrastre lo hace
+el bucle modal de movimiento de Windows, que **termina con el `WM_LBUTTONUP`**.
+Lanzándolo en el `mousedown`, un clic corto —el caso más probable de todos,
+porque desde que los clics no la atraviesan el usuario va a intentar apretar
+cosas que la ventanita tapa— puede terminar *antes* de que el bucle arranque:
+el `up` ya pasó, nunca llega otro, y **la ventanita queda pegada al mouse**
+paseando por la pantalla hasta el próximo clic. Encima de todo, sin foco, en
+medio de un dictado.
+
+Con el umbral de 3 px, un clic sin movimiento no arrastra nada y cuando el
+arrastre arranca el botón está garantizadamente apretado. De paso cierra otro
+caso: un clic que no mueve nada tampoco le hace creer al backend que el usuario
+eligió una posición.
+
+Y como `start_dragging` **no devuelve el control hasta que se suelta el botón**,
+el mismo comando sabe cuándo terminó el arrastre —no hay ningún evento que lo
+diga— y escribe ahí la posición final. Antes se escribía al esconder la
+ventanita, y si la grabación terminaba en medio de un arrastre (por el tope, o
+por un segundo F9) se guardaba una posición a mitad de camino que el usuario
+nunca eligió.
+
+### Dos pantallas: no es un bug, es el foco
+
+El usuario también reportó que dicta en una pantalla, mueve el mouse a la otra y
+el texto no aparece ahí. **No hay nada que arreglar**: Windows le entrega lo que
+se escribe a la ventana **activa** —aquella en la que se hizo clic por última
+vez—, y mover el mouse no la cambia. Pegar donde está el puntero haría que
+cualquier movimiento accidental mande el dictado a otro lado; es lo mismo que
+hace Wispr Flow y es lo predecible: el texto sale exacto donde saldría si se
+estuviera tecleando.
+
+Que el usuario haya tropezado significa que no estaba escrito en ningún lado, y
+eso sí era un defecto. Está ahora en el README, en la sección de la app nativa,
+redactado sin la palabra "foco" como término técnico: **hacé clic donde querés
+el texto**, y se puede hacer **mientras hablás** (el clic vale hasta que soltás
+la tecla). Sirve también para el caso más común de todos, que es haber arrancado
+a dictar con el cursor en la ventana equivocada.
+
+### Versiones
+
+El usuario tenía razón en el síntoma —la app instalada dice 1.0.0 y ya van
+varias actualizaciones— aunque los archivos ya decían 1.1.0 desde el Plan 8: lo
+que faltaba era **publicar** esa versión. Ésta es la que sale, con la ventanita
+chica y movible adentro. `Generar-Instalador.ps1` sincroniza los tres archivos y
+los relee para verificarlo.
+
+### El repositorio de GitHub
+
+`plugins.updater.endpoints` pasó de `REEMPLAZAR-USUARIO/REEMPLAZAR-REPO` a
+`LucasPilla60/mithflow`. Sigue siendo **el único lugar** donde vive ese dato:
+para renombrar el repositorio alcanza con cambiarlo ahí y volver a publicar.
+**No se creó nada en GitHub** —eso lo hace el usuario— y hasta que exista, la
+consulta devuelve 404, se anota y la app funciona igual.
+
+### Lo que NO se hizo, y por qué
+
+- **Dejar los clics pasando de largo salvo en un asa.** `WS_EX_TRANSPARENT` es
+  por ventana, no por región: haría falta jugar con el hit-test en Win32 crudo.
+  Y un asa chica en una ventanita de 168x48 sería una zona donde el usuario
+  intenta agarrarla y no pasa nada. Toda la tarjeta es el asa.
+- **Recordar una posición por monitor.** Sería lo correcto para quien enchufa y
+  desenchufa una pantalla todo el tiempo, pero son dos posiciones que se
+  contradicen y una tabla que mantener; hoy `acomodar` cubre el caso feo (el
+  monitor que no está) mandando a la de fábrica.
+- **Pegar el texto donde está el mouse.** Ver arriba: sería peor.
+- **Quitar el `title="Arrastrala para moverla"`.** Se dejó: es la única pista de
+  que se puede agarrar aparte del cursor `grab`, y aparece sólo si el mouse se
+  queda encima.
+
+### Verificación
+
+- `cargo test --workspace`: **102 núcleo + 143 app** (eran 102 y 133). Los 10
+  nuevos son todos de `superpuesta`: que una posición arrastrada que sigue en
+  pantalla se respeta **intacta** (también en el segundo monitor); que soltarla
+  **sobre la barra de tareas** se respeta y no se descarta; que si el monitor ya
+  no está se descarta; que colgando del borde de la pantalla se mete adentro;
+  que un monitor a la izquierda admite coordenadas negativas; que con la
+  pantalla al 150 % el tope usa el tamaño **físico**; que un monitor más chico
+  que la ventanita no paniquea; que un `ajustes.json` con `i32::MAX`/`i32::MIN`
+  no rompe nada ni devuelve una coordenada sin pantalla; que a caballo de dos
+  monitores entra entera en el que tiene el centro; y que la ventanita tapa
+  menos del 0,5 % de una pantalla Full HD (con 232x64 falla). Se corrigió además
+  el test de monitor diminuto, que asumía el tamaño viejo.
+- **Auditoría independiente del diff** (subagente cazador de defectos) con siete
+  hallazgos, todos arreglados en la misma sesión: el área de trabajo contra la
+  pantalla entera; el `mousedown` que podía dejar la ventanita pegada al mouse;
+  la posición a mitad de camino al esconderla en medio de un arrastre; el
+  permiso `start-dragging` que no está acotado a quien lo pide; el filtro de
+  Ajustes por `listo` que se perdía el final por `error`; el clic sin arrastre
+  que dejaba la bandera armada; y los dos comandos sincrónicos que hacían I/O de
+  disco en el hilo principal (ahora `async`).
+- `cargo clippy --workspace --all-targets -- -D warnings`: limpio.
+- `npm run build`: sin errores de TypeScript.
+- **`spike-superpuesta`**: la medición del foco de arriba, con testigo. Sale con
+  código 0.
+- **Instalador 1.1.0 firmado y verificado**: el `.exe` verifica contra la clave
+  pública de `tauri.conf.json` y, con un byte alterado, no verifica. El
+  `latest.json` apunta a `LucasPilla60/mithflow`, tag `v1.1.0`.
+- Capturas nuevas en `docs/capturas/`: `indicador-antes-y-despues.png`,
+  `indicador-1.0-hablando.png` (la vieja, sacada de git), y regeneradas
+  `indicador-hablando.png`, `indicador-silencio.png`,
+  `indicador-transcribiendo.png`, `indicador-cerca-del-tope.png` y
+  `ajustes-indicador.png` (con el botón nuevo).
+- **No se arrancó la app** ni se creó nada en GitHub. Las capturas salen del
+  backend simulado en el navegador.

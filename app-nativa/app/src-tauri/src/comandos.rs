@@ -304,6 +304,49 @@ pub fn leer_catalogo() -> Catalogo {
     }
 }
 
+/// La ventanita avisa que el usuario la está arrastrando. Lo invoca **ella**,
+/// que es la única que ve el mouse.
+///
+/// **Sincrónico a propósito, y NO se puede volver `async`.** Tauri corre los
+/// comandos que no son `async` en el hilo de la IPC —que en Windows es el
+/// principal—, y `tauri-runtime-wry` tiene ahí un atajo: `send_user_message`
+/// ejecuta el mensaje **en el acto** si ya está en el hilo principal, en vez de
+/// encolarlo en el bucle de eventos. Eso es lo que hace que `start_dragging`
+/// corra el bucle modal de movimiento acá y **no devuelva hasta que el usuario
+/// suelta el botón**, que es de lo que depende poder guardar la posición final.
+///
+/// Con `async` el comando saldría a un hilo del pool, el mensaje se encolaría y
+/// la llamada volvería enseguida: se guardaría la posición **inicial** y el
+/// arrastre entero se perdería, sin ningún error a la vista. Ver
+/// [`superpuesta::empezar_a_arrastrar`].
+///
+/// No recibe la posición: ésa la informa la ventana al moverse, y el frontend no
+/// tiene por qué poder decidir dónde queda.
+#[tauri::command]
+pub fn arrastrar_indicador(app: AppHandle) -> Result<(), String> {
+    superpuesta::empezar_a_arrastrar(&app)
+}
+
+/// ¿El usuario movió la ventanita alguna vez? Ajustes lo necesita para saber si
+/// el botón de volver a la posición de fábrica tiene algo que hacer.
+///
+/// `async` para que Tauri lo saque del hilo principal: toma el mutex del store,
+/// que el hilo del director puede estar sosteniendo mientras escribe el archivo.
+#[tauri::command]
+pub async fn indicador_movido(app: AppHandle) -> bool {
+    superpuesta::posicion_recordada(&app).is_some()
+}
+
+/// Olvida la posición arrastrada: la ventanita vuelve a aparecer donde diga el
+/// desplegable y a seguir al mouse entre monitores.
+///
+/// `async` por lo mismo, y con más razón: escribe `ajustes.json`, y una escritura
+/// sincrónica en el hilo principal con el antivirus mirando congela la interfaz.
+#[tauri::command]
+pub async fn restablecer_posicion_indicador(app: AppHandle) -> Result<(), String> {
+    superpuesta::olvidar_posicion(&app)
+}
+
 /// Lo que midió el perfilado. `PerfilHardware` no es serializable y tampoco
 /// debería serlo: este DTO es el contrato con la interfaz y puede cambiar sin
 /// tocar el núcleo.

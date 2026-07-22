@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "superpuesta",
-  "description": "Permisos de la ventanita de grabación. Todavía más acotados que los de la principal: sólo escuchar eventos. No lee ajustes, no descarga nada y no mueve ninguna ventana — lo único que hace es dibujar el nivel de audio y el reloj que le manda el director. Es una ventana que está siempre por encima de todo, así que cuanto menos pueda hacer, mejor.",
+  "description": "Permisos de la ventanita de grabación: SÓLO escuchar eventos. No se le dio 'core:window:allow-start-dragging' aunque se la pueda arrastrar — ese comando acepta la etiqueta de cualquier ventana, así que dárselo al webview que está siempre por encima de todo habría alcanzado también a la principal; el arrastre lo hace el comando 'arrastrar_indicador' desde Rust, donde el alcance es exactamente esta ventana. Ojo con lo que SÍ implica 'core:event:default': tauri-plugin-store emite 'store://change' a todos los webviews, así que esta ventana recibe cada clave y valor que se escriba en ajustes.json. Hoy no importa (carga sólo superpuesta.html del bundle, sin contenido remoto y con connect-src 'self'), pero es la razón por la que en ajustes.json no puede vivir ningún secreto.",
   "windows": ["superpuesta"],
   "permissions": ["core:event:default"]
 }

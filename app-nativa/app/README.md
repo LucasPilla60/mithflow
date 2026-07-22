@@ -83,6 +83,21 @@ Desde la consola del navegador, `mithflow.dictar("una frase")` dispara un
 `dictado-nuevo` y `mithflow.emit("estado-cambiado", …)` cambia el estado, para
 ver la actualización en vivo.
 
+La ventanita de grabación tiene su propia página, a su tamaño exacto:
+
+```powershell
+# http://localhost:1420/superpuesta-mock.html?escenario=hablando
+#                                            ?escenario=silencio
+#                                            ?escenario=transcribiendo
+#                                            ?escenario=cerca-del-tope
+#                            &ancho=232&alto=64   (para comparar contra la 1.0)
+```
+
+Arrastrarla desde ahí no hace nada: el `mockIPC` contesta el comando pero no
+hay ventana que mover. El arrastre real arranca recién cuando el mouse se corre
+3 px con el botón apretado, nunca en el `mousedown` — ver el comentario de
+`agarrar` en `src/superpuesta/Superpuesta.tsx` para qué se rompe si no.
+
 **No llega a producción**: `vite build` compila sólo `index.html`, así que ni
 `mock.html` ni `src/desarrollo/` entran al `dist/` que empaqueta Tauri. La
 comprobación es mecánica —`dist/` no puede contener la cadena
@@ -147,13 +162,24 @@ comparando el texto del mensaje.
 | `src-tauri/src/atajo.rs` | `rdev::grab` en su hilo, con supresión de la tecla |
 | `src-tauri/src/motor.rs` | carga del modelo, calentamiento y transcripción |
 | `src-tauri/src/comandos.rs` | la API que ve el frontend |
+| `src-tauri/src/superpuesta.rs` | la ventanita de grabación: tamaño, dónde aparece y la posición que el usuario arrastra |
 | `src-tauri/build.rs` | junta las 13 DLLs de ggml para el instalador |
 | `src/api.ts` | el contrato con el backend: comandos, eventos y tipos |
 | `src/App.tsx` | estado del motor, navegación y avisos |
 | `src/vistas/Dashboard.tsx` | métricas, gráficos e historial paginado |
 | `src/vistas/Ajustes.tsx` | los ajustes, incluido borrar el historial |
 | `src/vistas/Asistente.tsx` | primer arranque: medir, recomendar, descargar |
+| `src/superpuesta/` | la ventanita: medidor, reloj y el arrastre |
 | `src/desarrollo/` | backend simulado; **no entra al build de producción** |
+
+Y aparte del workspace, `../spike-superpuesta/` mide con Win32 —sobre la misma
+versión de `tao` que usa Tauri— que clickear y arrastrar la ventanita no le
+mueve el foco de teclado a la aplicación donde el usuario estaba escribiendo.
+Correrlo con el foco en otra ventana:
+
+```powershell
+cargo run --release --manifest-path ..\spike-superpuesta\Cargo.toml
+```
 
 Los tests del núcleo corren con `cargo test`; los de la app quedan fuera del
 default del workspace (necesitan `dist/`), así que van con

@@ -18,29 +18,48 @@
 //! exactamente el defecto que el proyecto ya resolvió una vez suprimiendo la
 //! tecla con `rdev` (ver `DECISIONES.md`, hallazgo del atajo global).
 //!
-//! Se cierra por **cuatro** vías, y ninguna sobra:
+//! Se cierra por **tres** vías, y ninguna sobra:
 //!
 //! 1. **`focusable(false)`** → `WS_EX_NOACTIVATE` en el estilo extendido, puesto
 //!    en el `CreateWindowEx`. Es la que de verdad garantiza la invariante:
 //!    Windows no convierte en ventana de primer plano a una ventana con ese
-//!    estilo, ni al mostrarla ni al hacerle clic. **Es la que no se puede
-//!    sacar**: `WebviewWindow::show()` termina en `ShowWindow(SW_SHOW)`, que
-//!    *activa* la ventana, y sin `WS_EX_NOACTIVATE` cada grabación le robaría el
-//!    foco al usuario.
+//!    estilo, ni al mostrarla ni al hacerle clic — **ni al arrastrarla**. Es la
+//!    que **no se puede sacar**: `WebviewWindow::show()` termina en
+//!    `ShowWindow(SW_SHOW)`, que *activa* la ventana, y sin `WS_EX_NOACTIVATE`
+//!    cada grabación le robaría el foco al usuario.
 //! 2. **`focused(false)`** → `SW_SHOWNOACTIVATE` en el primer `show`. Cubre el
 //!    arranque, pero **sólo el primero**: `tao` consume esa marca al mostrarla
 //!    por primera vez. Por eso no alcanza sola.
-//! 3. **`set_ignore_cursor_events(true)`** → `WS_EX_TRANSPARENT`: los clics
-//!    atraviesan la ventanita y llegan a lo que haya debajo. Sin esto, un clic
-//!    encima —en el medio de la pantalla, mientras el usuario dicta— no llegaría
-//!    a destino aunque no diera foco.
-//! 4. **Nunca se llama a `set_focus`.** La ventana principal tiene su
+//! 3. **Nunca se llama a `set_focus`.** La ventana principal tiene su
 //!    `ventana::enfocar`; ésta no tiene equivalente y no debe tenerlo.
 //!
 //! Y dos más que no son sobre el foco pero van en el mismo paquete:
 //! `skip_taskbar(true)` (no es una aplicación, es un indicador) y
 //! `decorations(false)` (una barra de título tendría botones que no se pueden
 //! apretar).
+//!
+//! # Por qué SÍ recibe clics (y antes no)
+//!
+//! Hasta la 1.0 la ventanita llamaba a `set_ignore_cursor_events(true)`
+//! (`WS_EX_TRANSPARENT`): los clics la atravesaban. Eso evitaba que estorbara,
+//! pero también hacía imposible agarrarla, y el usuario pidió poder correrla
+//! para leer lo que le tapa.
+//!
+//! `WS_EX_TRANSPARENT` y `WS_EX_NOACTIVATE` son propiedades **distintas**: la
+//! primera decide si el clic llega a la ventana, la segunda si el clic la
+//! activa. Que se pueda tener la segunda sin la primera —o sea, una ventana que
+//! se puede agarrar y no roba el foco— no se dio por sabido: se midió sobre
+//! Windows en `spike-superpuesta/`, con tres configuraciones y un testigo que
+//! prueba que el aparato detecta un robo de foco cuando lo hay.
+//!
+//! | Configuración | clic → ventana | foco intacto |
+//! |---|---|---|
+//! | `NOACTIVATE` + `TRANSPARENT` (la vieja) | no | sí |
+//! | `NOACTIVATE` sin `TRANSPARENT` (ésta) | **sí** | **sí** |
+//! | sin `NOACTIVATE` (testigo) | sí | **no** |
+//!
+//! El costo es real y está aceptado: ahora un clic sobre la ventanita no llega
+//! a lo que haya debajo. Por eso es chica y por eso se puede mover.
 //!
 //! # Por qué se crea al arrancar y no al apretar la tecla
 //!
@@ -50,14 +69,18 @@
 //! indicador está desactivado en Ajustes **no se crea nada**: ni ventana, ni
 //! eventos, ni medición (ver [`mithflow_core::audio::Medidor::activar`]).
 
+use crate::ajustes;
 use crate::estado::EstadoDto;
 use mithflow_core::audio::Nivel;
 use mithflow_core::config;
 use serde::Serialize;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 use tauri::{
-    AppHandle, LogicalSize, Manager, Monitor, PhysicalPosition, WebviewUrl, WebviewWindowBuilder,
+    AppHandle, LogicalSize, Manager, Monitor, PhysicalPosition, Runtime, WebviewUrl,
+    WebviewWindowBuilder,
 };
+use tauri_plugin_store::StoreExt;
 
 /// Etiqueta de la ventana. No es `"main"`: los permisos, los eventos de cierre
 /// y la capability se resuelven por etiqueta.
@@ -65,8 +88,14 @@ pub const ETIQUETA: &str = "superpuesta";
 
 /// Ancho y alto de la ventanita, en píxeles lógicos. Entran una palabra, el
 /// reloj y el medidor; nada más, que es el punto.
-const ANCHO: f64 = 232.0;
-const ALTO: f64 = 64.0;
+///
+/// Era 232x64 en la 1.0 y el usuario la encontró grande ("bastante grande" con
+/// sus palabras). 168x48 es **46 % menos superficie** dejando el medidor en
+/// ~21 px de alto —contra ~25 antes—, que es lo que no se podía tocar: su razón
+/// de ser es distinguir de un vistazo "te escucho" de "estoy grabando silencio",
+/// y esa diferencia la lleva sobre todo el color, no la altura.
+const ANCHO: f64 = 168.0;
+const ALTO: f64 = 48.0;
 
 /// Cuánto se despega del borde del área de trabajo. Suficiente para no quedar
 /// pegada a la barra de tareas y para no tapar lo que se está escribiendo.
@@ -82,6 +111,39 @@ pub const POSICIONES: &[&str] = &["abajo-centro", "arriba-centro", "abajo-derech
 /// estados desde su propio hilo y no puede quedarse esperando al hilo de la
 /// interfaz para decidir si tiene que mostrar un indicador.
 static A_LA_VISTA: AtomicBool = AtomicBool::new(false);
+
+/// El usuario tiene la ventanita agarrada con el mouse ahora mismo.
+///
+/// Está armada **exactamente** mientras corre el bucle modal de arrastre: la
+/// arma y la desarma [`empezar_a_arrastrar`], que es una sola función y sabe
+/// cuándo empieza y cuándo termina. Existe para **distinguir un arrastre del
+/// usuario de un movimiento nuestro**: la ventana también informa `Moved` cuando
+/// la ubica [`ubicar`] y cuando Windows la reacomoda sola al cruzar a un monitor
+/// con otro factor de escala. Sin esta bandera, esos dos casos se guardarían
+/// como "acá la quiere el usuario" y la ventanita dejaría de seguir al mouse
+/// entre pantallas sin que nadie se lo haya pedido.
+static AGARRADA: AtomicBool = AtomicBool::new(false);
+
+/// La posición que el usuario eligió arrastrando y que todavía no se escribió al
+/// disco. `Some` significa "hay algo que guardar".
+///
+/// No se escribe en cada `Moved` porque durante un arrastre llegan decenas por
+/// segundo y cada uno sería un archivo reescrito. Se vuelca al esconder la
+/// ventanita —o sea, una vez por dictado como mucho, y después de que el texto
+/// ya se pegó.
+static PENDIENTE: Mutex<Option<(i32, i32)>> = Mutex::new(None);
+
+/// Claves de la posición recordada dentro de `ajustes.json`.
+///
+/// Viven en el mismo archivo que los ajustes pero **no** en [`ajustes::Ajustes`]:
+/// no son algo que el usuario elija en un formulario sino dónde dejó una
+/// ventana, y mezclarlas tendría un costo concreto — guardar Ajustes escribiría
+/// la posición que el formulario leyó al abrirse, pisando la que el usuario
+/// eligió arrastrando la ventanita mientras tanto. `ajustes::guardar` sólo
+/// escribe los campos de su struct y `ajustes::cargar` ignora lo que no conoce,
+/// así que las dos mitades conviven sin tocarse.
+const CLAVE_X: &str = "indicador_x";
+const CLAVE_Y: &str = "indicador_y";
 
 /// El nivel de entrada de este instante, tal como lo dibuja la ventanita.
 ///
@@ -274,12 +336,232 @@ fn area_de(monitor: &Monitor) -> (i32, i32, u32, u32) {
     )
 }
 
+// ------------------------------------------------- la posición que se recuerda
+
+/// Una pantalla como la necesita [`acomodar`]: **todo** el monitor en píxeles
+/// físicos, y su factor de escala.
+///
+/// El monitor entero y no su área de trabajo, al revés que [`esquina`]. La
+/// diferencia son los ~40 px de la barra de tareas y no es un detalle: la
+/// ventanita está siempre por encima de todo, así que soltarla sobre la barra
+/// de tareas la deja perfectamente visible. Medir contra el área de trabajo
+/// haría que esa posición —que es justo donde uno la manda para sacársela de
+/// encima— se descartara como "fuera de pantalla" y la ventanita volviera sola
+/// al centro en el dictado siguiente, sin explicación.
+///
+/// La posición **de fábrica** sí se calcula sobre el área de trabajo
+/// ([`esquina`]): ahí no hay nadie eligiendo, y taparle la barra de tareas a
+/// quien no lo pidió sería de mal gusto.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Pantalla {
+    /// Origen y tamaño del monitor completo, en píxeles físicos.
+    pub limites: (i32, i32, u32, u32),
+    pub escala: f64,
+}
+
+impl Pantalla {
+    fn de(monitor: &Monitor) -> Self {
+        Self {
+            limites: (
+                monitor.position().x,
+                monitor.position().y,
+                monitor.size().width,
+                monitor.size().height,
+            ),
+            escala: monitor.scale_factor(),
+        }
+    }
+}
+
+/// Dónde poner la ventanita para respetar la posición que el usuario eligió
+/// arrastrándola, o `None` si esa posición ya no corresponde a ninguna pantalla.
+///
+/// # Los dos casos que hay que atender, y que no son el mismo
+///
+/// - **El monitor ya no está.** La notebook se desenchufó del segundo monitor y
+///   la posición guardada cae en coordenadas que hoy no dibuja nadie: la
+///   ventanita quedaría invisible y sin forma de recuperarla salvo editando el
+///   archivo de ajustes a mano. Devuelve `None`, y quien llama la manda a la
+///   posición de fábrica, que siempre se ve.
+/// - **El monitor está pero la ventanita quedó colgando del borde.** La pantalla
+///   cambió de resolución, o el usuario la soltó a medio salir. Acá su elección
+///   se respeta y sólo se la mete adentro: descartarla sería mover la ventanita
+///   de pantalla por un par de píxeles.
+///
+/// Se mide contra **el monitor entero** y no contra su área de trabajo (ver
+/// [`Pantalla`]): sobre la barra de tareas la ventanita se ve, porque está
+/// siempre por encima de todo, y ahí es donde uno la manda para sacársela de
+/// encima.
+///
+/// El criterio de "sigue estando" es el **centro** de la ventanita y no una
+/// esquina: es lo que decide en qué pantalla la ve el usuario, y es estable si
+/// dos monitores se tocan. Elegida la pantalla, la ventanita entra entera en
+/// ella —una ventanita partida entre dos monitores es justo el caso en el que
+/// el medidor deja de leerse de un vistazo, que es para lo único que existe.
+///
+/// Es una función suelta y pura por la misma razón que [`esquina`]: es la parte
+/// que se equivoca (orígenes negativos, escalas distintas por monitor, un
+/// archivo editado a mano con un número absurdo) y hay que poder probarla sin
+/// desenchufar un monitor de verdad.
+pub fn acomodar(
+    guardada: (i32, i32),
+    ventana: (f64, f64),
+    pantallas: &[Pantalla],
+) -> Option<PhysicalPosition<i32>> {
+    for pantalla in pantallas {
+        let escala = if pantalla.escala.is_finite() && pantalla.escala > 0.0 {
+            pantalla.escala
+        } else {
+            1.0
+        };
+        // La ventana se declara en lógicos y los monitores se informan en
+        // físicos: en una pantalla al 150 % ocupa la mitad más de lo que dice.
+        let ancho = (ventana.0 * escala).round() as i32;
+        let alto = (ventana.1 * escala).round() as i32;
+
+        let (izquierda, arriba, ancho_pantalla, alto_pantalla) = pantalla.limites;
+        let derecha = izquierda.saturating_add(ancho_pantalla as i32);
+        let abajo = arriba.saturating_add(alto_pantalla as i32);
+
+        let centro_x = guardada.0.saturating_add(ancho / 2);
+        let centro_y = guardada.1.saturating_add(alto / 2);
+        if centro_x < izquierda || centro_x >= derecha || centro_y < arriba || centro_y >= abajo {
+            continue;
+        }
+
+        // Un monitor más chico que la propia ventanita no puede producir un
+        // `clamp` invertido (que paniquearía): el tope nunca baja del origen.
+        let tope_x = derecha.saturating_sub(ancho).max(izquierda);
+        let tope_y = abajo.saturating_sub(alto).max(arriba);
+        return Some(PhysicalPosition::new(
+            guardada.0.clamp(izquierda, tope_x),
+            guardada.1.clamp(arriba, tope_y),
+        ));
+    }
+    None
+}
+
+/// La posición que el usuario dejó elegida, si hay alguna.
+///
+/// **Nada de lo que sale del archivo se cree sin revisar** (la regla de
+/// `ajustes`): un valor que no sea un entero de 32 bits se descarta y la
+/// ventanita vuelve a la posición de fábrica, que es el fallo cerrado.
+pub fn posicion_recordada<R: Runtime>(app: &AppHandle<R>) -> Option<(i32, i32)> {
+    let store = app.store(ajustes::ARCHIVO).ok()?;
+    let x = store.get(CLAVE_X)?.as_i64()?;
+    let y = store.get(CLAVE_Y)?.as_i64()?;
+    Some((i32::try_from(x).ok()?, i32::try_from(y).ok()?))
+}
+
+/// Guarda dónde quedó la ventanita.
+fn recordar_posicion<R: Runtime>(app: &AppHandle<R>, (x, y): (i32, i32)) -> Result<(), String> {
+    let store = app
+        .store(ajustes::ARCHIVO)
+        .map_err(|e| format!("no pude abrir {}: {e}", ajustes::ARCHIVO))?;
+    store.set(CLAVE_X, x);
+    store.set(CLAVE_Y, y);
+    store
+        .save()
+        .map_err(|e| format!("no pude guardar {}: {e}", ajustes::ARCHIVO))
+}
+
+/// Olvida la posición elegida: la ventanita vuelve a aparecer donde diga
+/// Ajustes y a seguir al mouse entre monitores. Es el botón "volver a la
+/// posición por defecto".
+pub fn olvidar_posicion<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    // Primero lo que está en vuelo: si quedara un pendiente, el próximo hide lo
+    // volvería a escribir y el botón no habría hecho nada.
+    if let Ok(mut pendiente) = PENDIENTE.lock() {
+        *pendiente = None;
+    }
+    let store = app
+        .store(ajustes::ARCHIVO)
+        .map_err(|e| format!("no pude abrir {}: {e}", ajustes::ARCHIVO))?;
+    store.delete(CLAVE_X);
+    store.delete(CLAVE_Y);
+    store
+        .save()
+        .map_err(|e| format!("no pude guardar {}: {e}", ajustes::ARCHIVO))
+}
+
+/// Arrastra la ventanita con el mouse, de punta a punta.
+///
+/// # Por qué el arrastre lo pide Rust y no el JavaScript
+///
+/// La ventanita podría llamar a `startDragging()` de `@tauri-apps/api` y
+/// ahorrarse este comando, pero entonces harían falta **dos** viajes de IPC
+/// —uno para armar [`AGARRADA`] y otro para arrastrar— y entre los dos no hay
+/// orden garantizado: si el arrastre llegara primero, el `Moved` de los
+/// primeros píxeles no contaría. Acá las dos cosas pasan en la misma función y
+/// en el orden correcto por construcción.
+///
+/// De paso, la ventanita se queda **sin** el permiso
+/// `core:window:allow-start-dragging`, que no está acotado a quien lo pide: ese
+/// comando acepta la etiqueta de cualquier ventana (`tauri::window::plugin`),
+/// así que dárselo al webview que está siempre por encima de todo era regalar
+/// más de lo necesario. Desde Rust no hay ACL de por medio y el alcance es
+/// exactamente esta ventana.
+///
+/// # Bloquea, y tiene que bloquear
+///
+/// `start_dragging` termina en `ReleaseCapture` + `WM_NCLBUTTONDOWN` con
+/// `HTCAPTION`, o sea el bucle modal de movimiento del sistema: **no devuelve
+/// el control hasta que el usuario suelta el botón**. Eso es justo lo que
+/// permite saber cuándo terminó el arrastre —no hay ningún evento que lo
+/// diga— y escribir ahí la posición final, en vez de al esconder la ventanita:
+/// si la grabación terminara en medio de un arrastre, esconderla guardaría una
+/// posición a mitad de camino que el usuario nunca eligió.
+///
+/// Que bloquee depende de que el comando que llama acá corra en el **hilo
+/// principal** (`tauri_runtime_wry::send_user_message` ejecuta el mensaje en el
+/// acto si ya está ahí, y lo encola si no). Por eso `comandos::arrastrar_indicador`
+/// es sincrónico y no puede volverse `async`: ahí está explicado qué se rompe.
+pub fn empezar_a_arrastrar<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    let Some(ventana) = app.get_webview_window(ETIQUETA) else {
+        return Err("el indicador de grabación ya no existe".to_string());
+    };
+    // Armar ANTES: el primer `Moved` puede llegar apenas arranque el bucle.
+    AGARRADA.store(true, Ordering::SeqCst);
+    let resultado = ventana
+        .start_dragging()
+        .map_err(|e| format!("no pude arrastrar el indicador: {e}"));
+    // Y guardar acá, con el botón ya soltado y la última posición anotada.
+    guardar_lo_arrastrado(app);
+    resultado
+}
+
+/// La ventanita se movió. Sólo cuenta si el usuario la está arrastrando: ver
+/// [`AGARRADA`] para los dos movimientos que no son suyos.
+pub fn anotar_movimiento(posicion: PhysicalPosition<i32>) {
+    if !AGARRADA.load(Ordering::SeqCst) {
+        return;
+    }
+    if let Ok(mut pendiente) = PENDIENTE.lock() {
+        *pendiente = Some((posicion.x, posicion.y));
+    }
+}
+
+/// Vuelca al disco lo que haya quedado de un arrastre y desarma la bandera.
+///
+/// Se llama al esconder o destruir la ventanita: una escritura por dictado como
+/// mucho, y después de que el texto ya se pegó.
+fn guardar_lo_arrastrado<R: Runtime>(app: &AppHandle<R>) {
+    AGARRADA.store(false, Ordering::SeqCst);
+    let pendiente = PENDIENTE.lock().ok().and_then(|mut p| p.take());
+    let Some(posicion) = pendiente else {
+        return;
+    };
+    if let Err(e) = recordar_posicion(app, posicion) {
+        eprintln!("no pude recordar dónde dejaste el indicador: {e}");
+    }
+}
+
 /// Crea la ventanita, escondida. Ver la nota del módulo para cada opción.
 pub fn crear(app: &AppHandle) -> tauri::Result<()> {
     if app.get_webview_window(ETIQUETA).is_some() {
         return Ok(());
     }
-    let ventana = WebviewWindowBuilder::new(app, ETIQUETA, WebviewUrl::App("superpuesta.html".into()))
+    WebviewWindowBuilder::new(app, ETIQUETA, WebviewUrl::App("superpuesta.html".into()))
         .title("MithFlow — grabando")
         .inner_size(ANCHO, ALTO)
         .resizable(false)
@@ -298,14 +580,11 @@ pub fn crear(app: &AppHandle) -> tauri::Result<()> {
         .visible(false)
         .build()?;
 
-    // Los clics la atraviesan. No se puede pedir en el builder: es una llamada
-    // aparte, y que falle no es fatal —la ventanita se vería igual— pero sí hay
-    // que enterarse, porque una ventanita que come clics en el medio de la
-    // pantalla es peor que no tenerla.
-    if let Err(e) = ventana.set_ignore_cursor_events(true) {
-        eprintln!("no pude hacer que los clics atraviesen el indicador: {e}");
-    }
+    // Acá iba `set_ignore_cursor_events(true)` (`WS_EX_TRANSPARENT`) y ya no
+    // va: es lo único que impedía agarrarla para moverla, y no es lo que
+    // sostiene la garantía del foco. Ver la nota del módulo.
     A_LA_VISTA.store(false, Ordering::SeqCst);
+    AGARRADA.store(false, Ordering::SeqCst);
     println!("indicador de grabación listo (escondido)");
     Ok(())
 }
@@ -318,6 +597,9 @@ pub fn crear(app: &AppHandle) -> tauri::Result<()> {
 /// esconda en vez de terminar la app.
 pub fn destruir(app: &AppHandle) {
     A_LA_VISTA.store(false, Ordering::SeqCst);
+    // Apagar el indicador en medio de un arrastre no puede tirar a la basura
+    // dónde lo dejó el usuario.
+    guardar_lo_arrastrado(app);
     if let Some(ventana) = app.get_webview_window(ETIQUETA) {
         if let Err(e) = ventana.destroy() {
             eprintln!("no pude cerrar el indicador de grabación: {e}");
@@ -358,26 +640,40 @@ pub fn reflejar(app: &AppHandle, dto: &EstadoDto, activado: bool, posicion: &str
         if let Err(e) = ventana.hide() {
             eprintln!("no pude esconder el indicador: {e}");
         }
+        // Recién acá se escribe al disco lo que el usuario haya arrastrado: el
+        // dictado ya terminó y el texto ya se pegó, así que una escritura de
+        // 200 bytes no le cuesta nada a nadie.
+        guardar_lo_arrastrado(app);
         return;
     }
 
     // La posición se recalcula en cada aparición y no una vez al crearla: el
     // usuario puede haberse mudado de monitor, o haber enchufado uno nuevo,
     // desde la grabación anterior.
-    ubicar(&ventana, posicion);
+    ubicar(app, &ventana, posicion);
     if let Err(e) = ventana.show() {
         eprintln!("no pude mostrar el indicador: {e}");
     }
 }
 
-/// Deja la ventanita en el monitor donde está el usuario.
+/// Deja la ventanita donde corresponde antes de mostrarla.
 ///
-/// El monitor se elige por dónde está el puntero y no por dónde estaba la
-/// ventana: quien tiene dos pantallas dicta en la que está mirando, y ahí es
-/// donde está el mouse. Si no se puede saber, cae al monitor donde ya estaba y
-/// después al principal; si tampoco hay ninguno, se deja donde esté antes que
-/// mandarla a una coordenada inventada.
-fn ubicar<R: tauri::Runtime>(ventana: &tauri::WebviewWindow<R>, posicion: &str) {
+/// # Manda lo que el usuario haya arrastrado
+///
+/// Si arrastró la ventanita, ahí se queda: entre dictados y entre reinicios, y
+/// en el monitor donde la dejó. Elegir a mano y que la aplicación te lo pise es
+/// peor que no poder elegir. Sólo se descarta cuando esa posición ya no existe
+/// —el monitor se desenchufó—, que es el caso en el que respetarla la dejaría
+/// invisible (ver [`acomodar`]).
+///
+/// # Y si no arrastró nada, el monitor donde está el mouse
+///
+/// Se elige por dónde está el puntero y no por dónde estaba la ventana: quien
+/// tiene dos pantallas dicta en la que está mirando, y ahí es donde está el
+/// mouse. Si no se puede saber, cae al monitor donde ya estaba y después al
+/// principal; si tampoco hay ninguno, se deja donde esté antes que mandarla a
+/// una coordenada inventada.
+fn ubicar<R: Runtime>(app: &AppHandle<R>, ventana: &tauri::WebviewWindow<R>, posicion: &str) {
     let monitor = ventana
         .cursor_position()
         .ok()
@@ -396,15 +692,32 @@ fn ubicar<R: tauri::Runtime>(ventana: &tauri::WebviewWindow<R>, posicion: &str) 
     if let Err(e) = ventana.set_size(LogicalSize::new(ANCHO, ALTO)) {
         eprintln!("no pude fijar el tamaño del indicador: {e}");
     }
-    let destino = esquina(
-        area_de(&monitor),
-        monitor.scale_factor(),
-        (ANCHO, ALTO),
-        posicion,
-    );
+
+    let destino = posicion_recordada(app)
+        .and_then(|guardada| acomodar(guardada, (ANCHO, ALTO), &pantallas(ventana)))
+        .unwrap_or_else(|| {
+            esquina(
+                area_de(&monitor),
+                monitor.scale_factor(),
+                (ANCHO, ALTO),
+                posicion,
+            )
+        });
     if let Err(e) = ventana.set_position(destino) {
         eprintln!("no pude ubicar el indicador: {e}");
     }
+}
+
+/// Los monitores que existen ahora mismo. Si no se pueden enumerar, la lista
+/// vacía hace que [`acomodar`] devuelva `None` y la ventanita caiga en la
+/// posición de fábrica: fallo cerrado, nunca en una coordenada sin pantalla.
+fn pantallas<R: Runtime>(ventana: &tauri::WebviewWindow<R>) -> Vec<Pantalla> {
+    ventana
+        .available_monitors()
+        .unwrap_or_default()
+        .iter()
+        .map(Pantalla::de)
+        .collect()
 }
 
 #[cfg(test)]
@@ -704,10 +1017,259 @@ mod tests {
     /// disparatada.
     #[test]
     fn un_monitor_diminuto_no_deja_la_ventanita_fuera_de_pantalla() {
-        let diminuto = (0, 0, 120, 60);
+        // Más chico que la ventanita en los dos ejes: se pega al origen y se ve
+        // recortada, que es preferible a no verse.
+        let diminuto = (0, 0, 120, 40);
         for posicion in POSICIONES {
             let p = esquina(diminuto, 1.0, (ANCHO, ALTO), posicion);
             assert_eq!((p.x, p.y), (0, 0), "{posicion} se salió de un monitor chico");
         }
+        // Y uno que entra a lo alto pero no a lo ancho —una pantalla vertical
+        // angosta—: se pega a la izquierda y sigue entrando por arriba y abajo.
+        let angosto = (0, 0, 120, 400);
+        for posicion in POSICIONES {
+            let p = esquina(angosto, 1.0, (ANCHO, ALTO), posicion);
+            assert_eq!(p.x, 0, "{posicion} se salió por el ancho");
+            assert!(
+                p.y >= 0 && (p.y as f64 + ALTO) <= 400.0,
+                "{posicion} se salió por el alto: {}",
+                p.y
+            );
+        }
+    }
+
+    /// Cuánto de la pantalla tapa. No es estética: el usuario pidió achicarla
+    /// porque le tapaba lo que estaba leyendo, y desde que se puede arrastrar
+    /// además se come los clics que le caen encima. Si alguien la agranda, que
+    /// sea a propósito y no por acumulación de "un par de píxeles más".
+    ///
+    /// Con 232x64 —la de la 1.0— este test falla: tapaba el 0,74 %.
+    #[test]
+    fn la_ventanita_tapa_una_fraccion_minima_de_la_pantalla() {
+        let (ancho_pantalla, alto_pantalla) = (PRINCIPAL.2 as f64, PRINCIPAL.3 as f64);
+        let porcion = (ANCHO * ALTO) / (ancho_pantalla * alto_pantalla);
+        assert!(
+            porcion < 0.005,
+            "tapa el {:.2} % de una pantalla Full HD",
+            porcion * 100.0
+        );
+
+        // Y el piso: por debajo de esto no entran el rótulo con el reloj al lado
+        // ni veinte barras que se distingan, que es para lo que existe.
+        let (ancho, alto) = (ANCHO, ALTO);
+        assert!(ancho >= 140.0, "{ancho} px de ancho no dibujan un medidor");
+        assert!(alto >= 40.0, "{alto} px de alto no dibujan un medidor");
+    }
+
+    // ---- La posición que el usuario elige arrastrándola --------------------
+
+    /// El monitor Full HD entero, barra de tareas incluida. `acomodar` mide
+    /// contra esto y no contra [`PRINCIPAL`], que es el área de trabajo.
+    const PRINCIPAL_ENTERO: (i32, i32, u32, u32) = (0, 0, 1920, 1080);
+
+    /// Dos monitores Full HD, el segundo a la derecha, los dos al 100 %.
+    fn dos_pantallas() -> Vec<Pantalla> {
+        vec![
+            Pantalla {
+                limites: PRINCIPAL_ENTERO,
+                escala: 1.0,
+            },
+            Pantalla {
+                limites: (1920, 0, 1920, 1080),
+                escala: 1.0,
+            },
+        ]
+    }
+
+    /// **La ventanita está por encima de todo, incluida la barra de tareas.**
+    /// Soltarla ahí —que es justo donde uno la manda para sacársela del medio—
+    /// la deja perfectamente visible, así que esa posición se respeta.
+    ///
+    /// Medir contra el área de trabajo la descartaba en silencio: el dictado
+    /// siguiente la devolvía al centro sin explicación, y Ajustes seguía
+    /// diciendo "manda dónde la dejaste con el mouse".
+    #[test]
+    fn una_ventanita_soltada_sobre_la_barra_de_tareas_se_queda_ahi() {
+        let pantallas = vec![Pantalla {
+            limites: PRINCIPAL_ENTERO,
+            escala: 1.0,
+        }];
+        // 1020 + 48 = 1068: pisa la barra de tareas (el área de trabajo termina
+        // en 1040) pero entra entera en la pantalla.
+        let sobre_la_barra = acomodar((600, 1020), (ANCHO, ALTO), &pantallas).expect("se ve");
+        assert_eq!((sobre_la_barra.x, sobre_la_barra.y), (600, 1020));
+
+        // Y el borde de verdad, el de la pantalla, sí la mete adentro.
+        let colgando = acomodar((600, 1050), (ANCHO, ALTO), &pantallas).expect("el centro entra");
+        assert_eq!(colgando.y, 1080 - ALTO as i32);
+    }
+
+    /// Lo primero y lo más importante: si la arrastró y ahí sigue habiendo
+    /// pantalla, ahí se queda. Tal cual, sin corregirle nada.
+    #[test]
+    fn una_posicion_arrastrada_que_sigue_en_pantalla_se_respeta_intacta() {
+        let elegida = (640, 300);
+        let p = acomodar(elegida, (ANCHO, ALTO), &dos_pantallas()).expect("esa posición existe");
+        assert_eq!((p.x, p.y), elegida);
+
+        // Y en el segundo monitor también: la elección incluye en qué pantalla.
+        let en_el_segundo = (2400, 800);
+        let q = acomodar(en_el_segundo, (ANCHO, ALTO), &dos_pantallas()).expect("existe");
+        assert_eq!((q.x, q.y), en_el_segundo);
+    }
+
+    /// El monitor que se desenchufó: la posición guardada cae en coordenadas que
+    /// ya no dibuja nadie. Devolver `None` es lo que manda la ventanita a la
+    /// posición de fábrica; respetarla la dejaría invisible y sin forma de
+    /// recuperarla salvo editando `ajustes.json` a mano.
+    #[test]
+    fn si_el_monitor_ya_no_esta_la_posicion_guardada_se_descarta() {
+        let solo_el_principal = vec![Pantalla {
+            limites: PRINCIPAL_ENTERO,
+            escala: 1.0,
+        }];
+        // Estaba en el segundo monitor, que hoy no existe.
+        assert_eq!(acomodar((2400, 800), (ANCHO, ALTO), &solo_el_principal), None);
+        // Un monitor a la izquierda que tampoco está.
+        assert_eq!(acomodar((-900, 400), (ANCHO, ALTO), &solo_el_principal), None);
+        // Y sin ningún monitor enumerado, nada puede acomodarse.
+        assert_eq!(acomodar((10, 10), (ANCHO, ALTO), &[]), None);
+    }
+
+    /// El monitor sigue estando pero la ventanita quedó colgando del borde —la
+    /// pantalla cambió de resolución, o el usuario la soltó a medio salir—. Su
+    /// elección se respeta y sólo se la mete adentro: descartarla sería moverla
+    /// de pantalla por un par de píxeles.
+    #[test]
+    fn una_ventanita_colgando_del_borde_se_mete_adentro_en_vez_de_descartarse() {
+        let pantallas = vec![Pantalla {
+            limites: PRINCIPAL_ENTERO,
+            escala: 1.0,
+        }];
+
+        // Colgando por la derecha: el centro todavía cae adentro.
+        let derecha = acomodar((1800, 500), (ANCHO, ALTO), &pantallas).expect("el centro entra");
+        assert_eq!(derecha.x, 1920 - ANCHO as i32);
+        assert_eq!(derecha.y, 500, "el eje que estaba bien no se toca");
+
+        // Colgando por abajo del borde de la PANTALLA: ahí sí desaparecería de
+        // verdad (la barra de tareas no la tapa, ver el test de arriba).
+        let abajo = acomodar((300, 1040), (ANCHO, ALTO), &pantallas).expect("el centro entra");
+        assert_eq!(abajo.y, 1080 - ALTO as i32);
+
+        // Y arriba a la izquierda, contra el origen.
+        let arriba_izq = acomodar((-40, -10), (ANCHO, ALTO), &pantallas).expect("el centro entra");
+        assert_eq!((arriba_izq.x, arriba_izq.y), (0, 0));
+    }
+
+    /// Un monitor con origen negativo (a la izquierda del principal) es el caso
+    /// que más se equivoca: ahí las coordenadas válidas son negativas.
+    #[test]
+    fn un_monitor_a_la_izquierda_admite_coordenadas_negativas() {
+        let pantallas = vec![
+            Pantalla {
+                limites: PRINCIPAL_ENTERO,
+                escala: 1.0,
+            },
+            Pantalla {
+                limites: (-1920, 0, 1920, 1080),
+                escala: 1.0,
+            },
+        ];
+        let p = acomodar((-1500, 200), (ANCHO, ALTO), &pantallas).expect("ese monitor existe");
+        assert_eq!((p.x, p.y), (-1500, 200));
+
+        // Y el borde izquierdo de ESE monitor, no el del principal.
+        let pegada = acomodar((-2000, 200), (ANCHO, ALTO), &pantallas).expect("el centro entra");
+        assert_eq!(pegada.x, -1920);
+    }
+
+    /// Una pantalla al 150 % informa su área en físicos mientras la ventana se
+    /// declara en lógicos: sin convertir, el tope de la derecha quedaría medio
+    /// ancho corrido y la ventanita colgando.
+    #[test]
+    fn con_la_pantalla_escalada_el_tope_usa_el_tamano_fisico() {
+        let pantallas = vec![Pantalla {
+            // 2880x1620 físicos al 150 % = 1920x1080 lógicos.
+            limites: (0, 0, 2880, 1620),
+            escala: 1.5,
+        }];
+        let p = acomodar((2750, 100), (ANCHO, ALTO), &pantallas).expect("el centro entra");
+        assert_eq!(p.x, 2880 - (ANCHO * 1.5) as i32);
+
+        // Una escala imposible no puede producir una coordenada absurda.
+        for rota in [0.0, -2.0, f64::NAN] {
+            let raras = vec![Pantalla {
+                limites: (0, 0, 1920, 1080),
+                escala: rota,
+            }];
+            let q = acomodar((100, 100), (ANCHO, ALTO), &raras).expect("el centro entra");
+            assert_eq!((q.x, q.y), (100, 100), "escala {rota}");
+        }
+    }
+
+    /// Un monitor más chico que la propia ventanita no puede producir un
+    /// `clamp` invertido, que paniquearía. Es el proyector de 640x480 otra vez.
+    #[test]
+    fn un_monitor_mas_chico_que_la_ventanita_no_paniquea() {
+        let pantallas = vec![Pantalla {
+            limites: (0, 0, 120, 40),
+            escala: 1.0,
+        }];
+        let p = acomodar((10, 5), (ANCHO, ALTO), &pantallas).expect("el centro entra");
+        assert_eq!((p.x, p.y), (0, 0), "se pega al origen y se ve recortada");
+    }
+
+    /// `ajustes.json` se puede editar a mano y el archivo de una versión vieja
+    /// puede tener cualquier cosa: ningún número puede paniquear ni mandar la
+    /// ventanita a una coordenada inventada.
+    #[test]
+    fn una_posicion_guardada_disparatada_no_rompe_nada() {
+        let pantallas = dos_pantallas();
+        for imposible in [
+            (i32::MAX, i32::MAX),
+            (i32::MIN, i32::MIN),
+            (i32::MAX, 0),
+            (0, i32::MIN),
+        ] {
+            // Lo único que se exige es que no paniquee y que, si contesta algo,
+            // sea una posición que cae en alguna de las pantallas.
+            if let Some(p) = acomodar(imposible, (ANCHO, ALTO), &pantallas) {
+                assert!(
+                    pantallas.iter().any(|pant| {
+                        let (x, y, w, h) = pant.limites;
+                        p.x >= x && p.y >= y && p.x < x + w as i32 && p.y < y + h as i32
+                    }),
+                    "{imposible:?} devolvió {p:?}, que no cae en ninguna pantalla"
+                );
+            }
+        }
+
+        // Y un área de monitor absurda tampoco.
+        let absurda = vec![Pantalla {
+            limites: (i32::MAX - 10, i32::MAX - 10, u32::MAX, u32::MAX),
+            escala: 1.0,
+        }];
+        let _ = acomodar((0, 0), (ANCHO, ALTO), &absurda);
+    }
+
+    /// Soltada justo sobre la juntura de dos monitores. Manda **el centro**: es
+    /// lo que decide en cuál de las dos pantallas la ve el usuario. Y una vez
+    /// elegida la pantalla, la ventanita entra entera: dejarla partida entre dos
+    /// monitores sería el único caso en que el medidor no se lee de un vistazo.
+    #[test]
+    fn a_caballo_de_dos_monitores_entra_entera_en_el_que_tiene_el_centro() {
+        let pantallas = dos_pantallas();
+
+        // Más de la mitad en el segundo monitor: el centro cae pasado 1920.
+        let mayormente_derecha = (1920 - (ANCHO as i32 / 2) + 10, 500);
+        let p = acomodar(mayormente_derecha, (ANCHO, ALTO), &pantallas).expect("el centro entra");
+        assert_eq!(p.x, 1920, "tenía que terminar de entrar en el segundo monitor");
+        assert_eq!(p.y, 500, "el eje que estaba bien no se toca");
+
+        // Más de la mitad en el principal: se mete entera en el principal.
+        let mayormente_izquierda = (1920 - (ANCHO as i32 / 2) - 10, 500);
+        let q = acomodar(mayormente_izquierda, (ANCHO, ALTO), &pantallas).expect("el centro entra");
+        assert_eq!(q.x, 1920 - ANCHO as i32);
     }
 }

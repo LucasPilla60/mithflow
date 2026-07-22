@@ -14,17 +14,20 @@
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  alCambiarEstado,
   alProgresoDescarga,
   borrarHistorial,
   cancelarTodas,
   descargarModelo,
   desinstalar,
   escribirAjustes,
+  indicadorMovido,
   leerAjustes,
   leerCatalogo,
   leerResumenDesinstalacion,
   mensajeDeError,
   MODELO_AUTOMATICO,
+  restablecerPosicionIndicador,
   type Ajustes,
   type Catalogo,
   type ProgresoDescarga,
@@ -72,6 +75,10 @@ export default function VistaAjustes({
   const [descarga, setDescarga] = useState<ProgresoDescarga | null>(null);
   const [confirmandoBorrado, setConfirmandoBorrado] = useState(false);
   const [muletillaNueva, setMuletillaNueva] = useState("");
+  // Si el usuario arrastró la ventanita de grabación alguna vez. No es un ajuste
+  // del formulario —no se edita ni se guarda con el botón "Guardar"—: es un
+  // hecho que el backend conoce y que sólo habilita el botón de volver atrás.
+  const [indicadorArrastrado, setIndicadorArrastrado] = useState(false);
   // La desinstalación tiene su propia confirmación de dos pasos: `resumen` es
   // el paso 2 (existe sólo mientras el panel está abierto, con los tamaños ya
   // medidos a la vista).
@@ -83,17 +90,47 @@ export default function VistaAjustes({
 
   useEffect(() => {
     montado.current = true;
-    Promise.all([leerAjustes(), leerCatalogo()])
-      .then(([a, c]) => {
+    Promise.all([leerAjustes(), leerCatalogo(), indicadorMovido()])
+      .then(([a, c, movido]) => {
         if (!montado.current) return;
         setGuardados(a);
         setBorrador(a);
         setCatalogo(c);
+        setIndicadorArrastrado(movido);
       })
       .catch((e) => montado.current && setError(mensajeDeError(e)));
     return () => {
       montado.current = false;
     };
+  }, []);
+
+  /**
+   * La ventanita sólo se puede arrastrar mientras aparece, o sea **mientras se
+   * dicta** — y se puede dictar con esta pantalla abierta. Sin releer al
+   * terminar el dictado, quien la acaba de mover encontraría el botón gris
+   * hasta volver a entrar a Ajustes.
+   *
+   * Se relee en **cualquier** estado que no sea grabando ni transcribiendo, que
+   * son los dos en los que la ventanita está a la vista (`superpuesta::
+   * visible_en`). Filtrar sólo por `listo` dejaría afuera el final por error
+   * —el atajo que se rompe en medio de un dictado deja el estado en `error`, y
+   * de ahí no se vuelve a `listo` sin reiniciar—. La posición ya está escrita
+   * antes de llegar acá: el backend la guarda al soltar el botón del mouse, no
+   * al esconder la ventanita.
+   */
+  useEffect(() => {
+    const suscripciones = [
+      alCambiarEstado((e) => {
+        if (e.estado === "grabando" || e.estado === "transcribiendo") return;
+        indicadorMovido()
+          .then((movido) => montado.current && setIndicadorArrastrado(movido))
+          .catch(() => {
+            // Que no se pueda releer no rompe nada: el botón se queda como
+            // estaba y la próxima visita a Ajustes lo corrige.
+          });
+      }),
+    ];
+    return () => cancelarTodas(suscripciones);
   }, []);
 
   // Una descarga lanzada desde acá avisa por evento, igual que la del asistente.
@@ -161,6 +198,24 @@ export default function VistaAjustes({
     }
     cambiar("muletillas", [...borrador.muletillas, limpia]);
     setMuletillaNueva("");
+  };
+
+  /**
+   * Devuelve la ventanita a la esquina elegida en el desplegable.
+   *
+   * Va por su propio comando y no por "Guardar": la posición arrastrada no vive
+   * en el formulario. Si viajara con el resto de los ajustes, guardar cualquier
+   * otra cosa escribiría la posición que este formulario leyó al abrirse y
+   * pisaría la que el usuario eligió arrastrando la ventanita mientras tanto.
+   */
+  const volverAlaPosicionDeFabrica = () => {
+    restablecerPosicionIndicador()
+      .then(() => {
+        if (!montado.current) return;
+        setIndicadorArrastrado(false);
+        avisar("La ventanita vuelve a su posición de siempre.", "info");
+      })
+      .catch((e) => montado.current && setError(mensajeDeError(e)));
   };
 
   const borrarTodoElHistorial = () => {
@@ -267,8 +322,14 @@ export default function VistaAjustes({
           entra por el micrófono y el tiempo que llevás. Existe para cuando no
           tenés MithFlow abierto: sin ella, los tonos avisan que la grabación
           arrancó pero no que te esté escuchando, y se puede hablar cinco minutos
-          al pedo con el micrófono equivocado. No toma el foco ni recibe clics:
-          el cursor se queda donde estabas escribiendo.
+          al pedo con el micrófono equivocado. Nunca toma el foco: hagas lo que
+          hagas con ella, el cursor se queda donde estabas escribiendo.
+        </p>
+        <p className="porque">
+          Si te tapa algo, <strong>agarrala con el mouse y movela</strong>: se
+          queda donde la dejes, también la próxima vez que abras MithFlow. Ojo
+          que los clics ya no la atraviesan, así que mientras esté encima de un
+          botón ese botón no se puede apretar — por eso se puede correr.
         </p>
 
         <div className="separado">
@@ -285,7 +346,11 @@ export default function VistaAjustes({
 
           <Campo
             rotulo="Dónde aparece"
-            ayuda="En la pantalla donde tengas el mouse, para que en dos monitores salga en el que estás mirando."
+            ayuda={
+              indicadorArrastrado
+                ? "Ahora manda dónde la dejaste con el mouse. Volvé a la de fábrica para que use esta esquina otra vez."
+                : "En la pantalla donde tengas el mouse, para que en dos monitores salga en el que estás mirando."
+            }
           >
             <select
               value={borrador.indicador_posicion}
@@ -298,6 +363,24 @@ export default function VistaAjustes({
                 </option>
               ))}
             </select>
+          </Campo>
+
+          <Campo
+            rotulo="La moviste con el mouse"
+            ayuda={
+              indicadorArrastrado
+                ? "Vuelve a la esquina de arriba y a aparecer en la pantalla donde tengas el mouse."
+                : "Todavía no la moviste: aparece donde diga la esquina de arriba."
+            }
+          >
+            <button
+              type="button"
+              className="boton chico"
+              disabled={!indicadorArrastrado}
+              onClick={volverAlaPosicionDeFabrica}
+            >
+              Volver a la posición por defecto
+            </button>
           </Campo>
         </div>
       </section>

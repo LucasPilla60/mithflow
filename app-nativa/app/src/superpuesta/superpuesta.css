@@ -31,35 +31,43 @@ body {
   height: 100%;
   background: transparent;
   overflow: hidden;
-  /* Es un indicador, no un documento: nada acá se selecciona ni se arrastra. */
+  /* Es un indicador, no un documento: nada de esto se selecciona. Y sin esto,
+     agarrar la ventanita para moverla empezaría pintando de azul "Grabando". */
   user-select: none;
-  cursor: default;
 }
 
 #root {
   height: 100%;
 }
 
+/* La tarjeta entera es el asa: no hay una barra de arrastre aparte porque en
+   168x48 no entra, y porque cualquier zona muerta sería una zona donde el
+   usuario intenta agarrarla y no pasa nada. */
 .tarjeta {
   box-sizing: border-box;
   height: 100%;
   display: flex;
   flex-direction: column;
-  gap: 7px;
-  padding: 10px 14px;
-  border-radius: 14px;
+  gap: 4px;
+  padding: 6px 9px;
+  border-radius: 11px;
   border: 1px solid var(--borde);
   /* Casi opaca: translúcida del todo, el medidor se confunde con lo que haya
      debajo — que es justo lo que hay que poder leer de reojo. */
   background: rgba(20, 26, 34, 0.94);
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.55);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.55);
   color: var(--texto);
+  cursor: grab;
+}
+
+.tarjeta:active {
+  cursor: grabbing;
 }
 
 .fila {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   line-height: 1;
 }
 
@@ -68,8 +76,8 @@ body {
 }
 
 .punto {
-  width: 8px;
-  height: 8px;
+  width: 7px;
+  height: 7px;
   border-radius: 50%;
   flex: none;
   background: var(--rojo);
@@ -82,15 +90,22 @@ body {
 }
 
 .rotulo {
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.01em;
+  /* Con la ventanita mas chica, si algo no entra que se recorte el rotulo y
+     nunca el reloj, que es el unico dato de la fila. */
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .reloj {
-  font-size: 12px;
+  font-size: 11px;
   font-variant-numeric: tabular-nums;
   color: var(--texto-tenue);
+  flex: none;
 }
 
 /* El tope está por cortar la grabación sola: se avisa antes, no después. */

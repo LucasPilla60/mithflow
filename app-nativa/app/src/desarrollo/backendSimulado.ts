@@ -247,6 +247,11 @@ export function instalarBackendSimulado(escenario: Escenario) {
   const entradas = escenario === "primer-arranque" ? [] : historialDeMentira();
   const ajustes: Ajustes = { ...AJUSTES };
   const descargados = new Set(escenario === "primer-arranque" ? [] : ["F16", "Q4_K_M"]);
+  // Que arranque en `true` salvo en el primer arranque es a propósito: así la
+  // pantalla de Ajustes se puede mirar con el botón de "volver a la posición por
+  // defecto" habilitado, que es el estado que hay que revisar. Apretarlo lo
+  // apaga, igual que en la app real.
+  let indicadorArrastrado = escenario !== "primer-arranque";
 
   const CARGANDO: EstadoDto = {
     estado: "cargando",
@@ -562,6 +567,15 @@ export function instalarBackendSimulado(escenario: Escenario) {
           });
           return null;
         }
+        case "arrastrar_indicador":
+          // En la app real esto corre el bucle modal de Windows y no vuelve
+          // hasta que se suelta el botón. Acá no hay ventana que mover.
+          return null;
+        case "indicador_movido":
+          return indicadorArrastrado;
+        case "restablecer_posicion_indicador":
+          indicadorArrastrado = false;
+          return null;
         case "pausar":
         case "reanudar":
         case "alternar_pausa":

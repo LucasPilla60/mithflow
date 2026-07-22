@@ -36,15 +36,53 @@ vocabulario, arranque con Windows) y un asistente de primer arranque que mide la
 máquina y recomienda qué modelo bajar.
 
 **Indicador de grabación.** Al apretar la tecla aparece una ventanita chica
-—abajo y centrada por defecto— con el nivel de lo que entra por el micrófono y
-el tiempo que llevás grabando. Las barras se ponen **teal cuando hay voz** y
-**grises cuando sólo hay ruido de fondo**, con el mismo umbral que usa el motor
-para decidir si vale la pena transcribir: sirve para darse cuenta de que el
+—168 × 48 px, abajo y centrada por defecto— con el nivel de lo que entra por el
+micrófono y el tiempo que llevás grabando. Las barras se ponen **teal cuando hay
+voz** y **grises cuando sólo hay ruido de fondo**, con el mismo umbral que usa el
+motor para decidir si vale la pena transcribir: sirve para darse cuenta de que el
 micrófono está silenciado o de que la entrada es el auricular equivocado, sin
 tener la ventana abierta. Cuando soltás la tecla se queda en "Transcribiendo…"
-hasta que llega el texto. **No toma el foco ni recibe clics**: el cursor se queda
-donde estabas escribiendo. Se puede mover de esquina o apagar del todo desde
-Ajustes.
+hasta que llega el texto.
+
+**Se agarra con el mouse y se mueve.** Si te tapa algo, arrastrala: se queda
+donde la dejes, entre dictados y entre reinicios, y en el monitor donde la hayas
+soltado. Desde *Ajustes → Indicador de grabación* se vuelve a la posición por
+defecto, se cambia la esquina o se apaga del todo. **Nunca toma el foco**: hagas
+lo que hagas con ella, el cursor de texto se queda donde estabas escribiendo.
+Como contrapartida, los clics ya no la atraviesan — mientras esté encima de un
+botón ese botón no se puede apretar, y por eso se puede correr.
+
+![Antes y después de la ventanita](app-nativa/docs/capturas/indicador-antes-y-despues.png)
+
+### 🖱️ Dos pantallas: hacé clic donde querés el texto
+
+Si trabajás con dos monitores puede pasarte esto: **empezás a dictar en una
+pantalla, movés el mouse a la otra y el texto no aparece ahí**. No está roto:
+es como funciona Windows, y es lo mismo que hace Wispr Flow.
+
+**Windows le entrega lo que se escribe a la ventana "activa"**, que es aquella
+en la que hiciste clic por última vez — la que tiene la barra de título
+iluminada y el cursor de texto parpadeando. **Mover el mouse no la cambia**: el
+puntero puede pasear por toda la pantalla y lo que escribas sigue yendo al mismo
+lado. MithFlow no hace nada distinto de lo que haría tu teclado.
+
+**Qué hacer, entonces:**
+
+1. **Hacé clic en el lugar donde querés el texto** (el campo, el documento, el
+   chat). Ahí tiene que quedar el cursor parpadeando.
+2. Apretá la tecla y hablá.
+
+Y esto es lo cómodo: **el clic se puede hacer mientras hablás**. Si arrancaste a
+dictar y te diste cuenta de que el cursor está en la ventana equivocada, hacé
+clic en la correcta sin dejar de hablar y soltá la tecla ahí: el texto se pega
+donde hiciste el último clic. El indicador de grabación tampoco te lo va a robar
+—está hecho para no tomar nunca el foco—, así que podés moverlo de lugar en el
+medio de un dictado y seguir hablando.
+
+> **¿Y por qué no pega donde está el mouse?** Porque cualquier movimiento
+> accidental del mouse —o un rincón caliente, o una notificación— mandaría el
+> dictado a otro lado. Que mande el clic es lo predecible: el texto sale exacto
+> donde saldría si lo estuvieras tecleando.
 
 ### Instalación
 
@@ -127,28 +165,39 @@ Si corrés MithFlow desde una copia de desarrollo (`target\release\`) en vez de
 la instalación, Ajustes lo dice con todas las letras: no hay nada que
 actualizar.
 
-### ⚠️ Qué reemplazar cuando crees el repositorio en GitHub
+### ⚠️ El repositorio de GitHub: ya está configurado, y falta crearlo
 
-Un solo lugar, y el script no te deja compilar hasta que lo hagas:
+La app viene apuntando a:
+
+```
+https://github.com/LucasPilla60/mithflow/releases/latest/download/latest.json
+```
+
+**Falta el paso que no hace el código: crear ese repositorio en tu cuenta**, con
+el nombre `mithflow`, y publicar ahí las releases (ver más abajo). Hasta que
+exista, la consulta de actualizaciones devuelve 404, se anota y la app sigue
+funcionando igual: nada del actualizador puede impedir dictar.
+
+**Si preferís otro nombre**, se cambia en **un solo lugar**:
 
 **Archivo:** `app-nativa/app/src-tauri/tauri.conf.json`
 **Dónde:** `plugins` → `updater` → `endpoints`
 
 ```json
 "endpoints": [
-  "https://github.com/REEMPLAZAR-USUARIO/REEMPLAZAR-REPO/releases/latest/download/latest.json"
+  "https://github.com/LucasPilla60/mithflow/releases/latest/download/latest.json"
 ]
 ```
 
-Cambiá `REEMPLAZAR-USUARIO/REEMPLAZAR-REPO` por lo tuyo (por ejemplo
-`mithdata/mithflow`) y listo. `Generar-Instalador.ps1` lee esa URL y deriva de
-ahí la de descarga del instalador, así que **no hay un segundo lugar** donde el
-nombre del repositorio pueda quedar mal.
+`Generar-Instalador.ps1` lee esa URL y deriva de ahí la de descarga del
+instalador, así que **no hay un segundo lugar** donde el nombre del repositorio
+pueda quedar mal.
 
 Esa URL queda grabada dentro del `.exe`: después de cambiarla hay que volver a
-compilar para que las instalaciones nuevas sepan a dónde consultar. El
-repositorio puede ser público o privado, pero si es privado las releases no son
-descargables sin credenciales y el actualizador no va a poder bajar nada.
+compilar para que las instalaciones nuevas sepan a dónde consultar (y las que ya
+están instaladas van a seguir consultando la vieja hasta que actualicen una vez).
+El repositorio puede ser público o privado, pero si es privado las releases no
+son descargables sin credenciales y el actualizador no va a poder bajar nada.
 
 ### Publicar una versión nueva
 
@@ -163,7 +212,8 @@ pasar la versión: recompila la que ya está.)
 
 El script hace todo solo:
 
-1. Corta si el repositorio de GitHub todavía dice `REEMPLAZAR`.
+1. Corta si el endpoint del actualizador no tiene forma de URL de GitHub (o si
+   todavía dijera `REEMPLAZAR`, que ya no es el caso).
 2. Escribe la versión en los **tres** archivos que la llevan
    (`app-nativa/Cargo.toml`, `app-nativa/app/package.json`,
    `app-nativa/app/src-tauri/tauri.conf.json`) y **los relee para verificar que
@@ -411,11 +461,13 @@ Bajá `vol` en `play_tone()` si los querés aún más discretos (default `0.15`)
 
 ---
 
-## ✅ Estado (21/7/2026)
+## ✅ Estado (22/7/2026)
 
 **Python:** funcionando end-to-end en Windows 11 + RTX 3080 — dictado, pegado, sonidos, dashboard y analíticas. Probado con micrófono real.
 
-**Nativa:** instalador 1.1.0 generado y firmado, con actualizaciones automáticas contra GitHub Releases. La 1.0.0 se verificó en instalación limpia (arranca, carga el motor por Vulkan y queda lista); el dictado real con micrófono todavía no se probó en la versión nativa.
+**Nativa:** instalador **1.1.0** generado y firmado, con actualizaciones automáticas contra GitHub Releases y el indicador de grabación chico y arrastrable. La 1.0.0 se verificó en instalación limpia (arranca, carga el motor por Vulkan y queda lista); el dictado real con micrófono todavía no se probó en la versión nativa.
+
+**Falta crear el repositorio** `LucasPilla60/mithflow` en GitHub y publicar ahí la release `v1.1.0` con los dos archivos de `instalador\`. Hasta entonces la consulta de actualizaciones devuelve 404 y la app funciona igual.
 
 **Ojo con la 1.0.0:** no tiene actualizador, así que las máquinas que la tengan instalada **no** van a recibir la 1.1.0 solas. Hay que instalarla a mano una vez en cada una; de ahí en adelante sí se actualizan solas.
 

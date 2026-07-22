@@ -28,9 +28,9 @@
   },
   "plugins": {
     "updater": {
-      "_comentario": "REEMPLAZAR-USUARIO/REEMPLAZAR-REPO es el ÚNICO lugar del proyecto donde va el nombre del repositorio de GitHub. Generar-Instalador.ps1 lee esta URL, deriva de ella la URL de descarga del instalador y SE NIEGA A COMPILAR mientras diga REEMPLAZAR. Ver «Actualizaciones automáticas» en el README.",
+      "_comentario": "LucasPilla60/mithflow es el ÚNICO lugar del proyecto donde va el nombre del repositorio de GitHub: para renombrarlo alcanza con cambiarlo acá y volver a correr Generar-Instalador.ps1, que lee esta URL y deriva de ella la URL de descarga del instalador. Ojo que la URL queda grabada dentro del .exe, así que las instalaciones que ya están afuera siguen consultando la vieja hasta que actualicen. Ver «Actualizaciones automáticas» en el README.",
       "endpoints": [
-        "https://github.com/REEMPLAZAR-USUARIO/REEMPLAZAR-REPO/releases/latest/download/latest.json"
+        "https://github.com/LucasPilla60/mithflow/releases/latest/download/latest.json"
       ],
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDNDRDA2NTlENjQwRDQzRTIKUldUaVF3MWtuV1hRUENDMEh5YllqMHNxalZob21ZWkxWR3VieUtOcVo0NS9QYTRvZmZjSGs0clUK",
       "windows": {
