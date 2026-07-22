@@ -11,6 +11,7 @@
 //! mitad, abrir la ventana mostraría una lista vacía.
 
 use crate::estado::EstadoDto;
+use crate::superpuesta::NivelAudio;
 use mithflow_core::history;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Runtime};
@@ -20,6 +21,9 @@ pub const DICTADO_NUEVO: &str = "dictado-nuevo";
 pub const PROGRESO_DESCARGA: &str = "progreso-descarga";
 pub const PERFILADO_LISTO: &str = "perfilado-listo";
 pub const AVISO: &str = "aviso";
+/// Cuánto está entrando por el micrófono, unas veinticinco veces por segundo
+/// **y sólo mientras se graba** (ver `superpuesta::hay_que_medir`).
+pub const NIVEL_AUDIO: &str = "nivel-audio";
 
 /// Algo que contarle al usuario sin cambiar de estado: el micrófono estaba
 /// ocupado, no se escuchó nada, la grabación llegó al tope.
@@ -102,6 +106,27 @@ pub fn aviso<R: Runtime>(app: &AppHandle<R>, texto: &str, nivel: &'static str) {
 
 pub fn progreso_descarga<R: Runtime>(app: &AppHandle<R>, progreso: ProgresoDescarga) {
     emitir(app, PROGRESO_DESCARGA, progreso);
+}
+
+/// El nivel de entrada para la ventanita de grabación.
+///
+/// A diferencia del resto, **éste no tiene comando espejo y no lo necesita**: no
+/// cuenta un hecho que haya que reconstruir al abrir una ventana, sino el
+/// instante que está pasando. Un nivel viejo no significa nada, y el siguiente
+/// llega en cuarenta milisegundos.
+///
+/// # Por qué se emite a todas las ventanas y no sólo a la ventanita
+///
+/// `emit_to(etiqueta, …)` parece lo correcto —es el único que lo mira— pero
+/// exige que el oyente se haya registrado con esa misma etiqueta como destino:
+/// un `listen()` pelado del frontend queda como `EventTarget::Any`, y el filtro
+/// de Tauri (`manager::emit_to`) **no** hace coincidir `Any` con `AnyLabel`. O
+/// sea que un descuido del lado JavaScript deja la ventanita sin un solo evento,
+/// que es la falla total de esta función y además silenciosa. Con `emit` el
+/// costo de más es que la ventana principal, si está abierta durante un dictado,
+/// recibe veinticinco mensajes por segundo que ignora.
+pub fn nivel_audio<R: Runtime>(app: &AppHandle<R>, nivel: NivelAudio) {
+    emitir(app, NIVEL_AUDIO, nivel);
 }
 
 #[cfg(test)]

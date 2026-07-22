@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "superpuesta",
+  "description": "Permisos de la ventanita de grabación. Todavía más acotados que los de la principal: sólo escuchar eventos. No lee ajustes, no descarga nada y no mueve ninguna ventana — lo único que hace es dibujar el nivel de audio y el reloj que le manda el director. Es una ventana que está siempre por encima de todo, así que cuanto menos pueda hacer, mejor.",
+  "windows": ["superpuesta"],
+  "permissions": ["core:event:default"]
+}

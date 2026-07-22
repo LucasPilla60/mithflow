@@ -18,6 +18,7 @@ use crate::bandeja;
 use crate::estado::{Estado, EstadoCompartido, EstadoDto, FalloDelMotor};
 use crate::motor::{self, AlMotor};
 use crate::sonidos::{Sonidos, Tono};
+use crate::superpuesta::{self, NivelAudio};
 use crate::{atajo, eventos};
 use mithflow_core::audio::Recorder;
 use mithflow_core::{config, history, DictationResult};
@@ -30,6 +31,17 @@ use tauri::AppHandle;
 /// Cada cuánto se despierta el director mientras graba, para vigilar el tope de
 /// duración. 250 ms no se notan y no cuestan nada: el hilo duerme.
 const LATIDO: Duration = Duration::from_millis(250);
+
+/// El latido cuando además hay que alimentar el medidor de la ventanita.
+///
+/// 40 ms son 25 cuadros por segundo: suficiente para que las barras se muevan
+/// como el habla y no como un semáforo, y lejos todavía de inundar el canal de
+/// eventos. Cada despertar es leer tres átomos y emitir un objeto de siete
+/// números; el hilo duerme el resto del tiempo.
+///
+/// **Rige sólo mientras se graba y con el indicador activado**: sin él el
+/// director sigue latiendo cada [`LATIDO`], como siempre.
+const LATIDO_CON_MEDIDOR: Duration = Duration::from_millis(40);
 
 /// Lo que el resto del programa le puede pedir al director.
 pub enum Mensaje {
@@ -120,6 +132,8 @@ pub fn lanzar(
 ) {
     let limite_grabacion_s = cfg.limite_grabacion_s as f32;
     let modelo_elegido = cfg.modelo.clone();
+    let indicador = cfg.indicador;
+    let indicador_posicion = cfg.indicador_posicion.clone();
     let creado = std::thread::Builder::new()
         .name("mithflow-director".into())
         .spawn(move || {
@@ -135,6 +149,8 @@ pub fn lanzar(
                 espejo,
                 sonidos,
                 limite_grabacion_s,
+                indicador,
+                indicador_posicion,
             }
             .atender(cola)
         });
@@ -171,6 +187,13 @@ struct Director {
     sonidos: Sonidos,
     /// Tope de duración de una grabación, configurable desde Ajustes.
     limite_grabacion_s: f32,
+    /// Si la ventanita de grabación está activada. Vive acá —y no se relee de
+    /// Ajustes en cada publicación— porque el director publica desde su hilo y
+    /// abrir el archivo de ajustes en ese camino sería I/O adentro de la
+    /// máquina de estados.
+    indicador: bool,
+    /// Una de `superpuesta::POSICIONES`.
+    indicador_posicion: String,
 }
 
 impl Director {
@@ -181,9 +204,13 @@ impl Director {
 
         loop {
             let mensaje = if matches!(self.estado, Estado::Grabando) {
-                match cola.recv_timeout(LATIDO) {
+                match cola.recv_timeout(self.latido()) {
                     Ok(m) => m,
                     Err(RecvTimeoutError::Timeout) => {
+                        // El orden importa: primero se cuenta lo que está
+                        // entrando y después se mira el tope, porque vigilarlo
+                        // puede cortar la grabación y dejar de haber qué contar.
+                        self.publicar_el_nivel();
                         self.vigilar_tope();
                         continue;
                     }
@@ -197,6 +224,40 @@ impl Director {
             };
             self.procesar(mensaje);
         }
+    }
+
+    /// Cada cuánto despertarse. Sólo se acelera cuando hay una ventanita
+    /// esperando el medidor: quien desactivó el indicador sigue con los 250 ms
+    /// de siempre.
+    fn latido(&self) -> Duration {
+        if superpuesta::hay_que_medir(self.estado.clave(), self.indicador) {
+            LATIDO_CON_MEDIDOR
+        } else {
+            LATIDO
+        }
+    }
+
+    /// Manda a la ventanita cuánto está entrando por el micrófono.
+    ///
+    /// Es lo único que distingue "te estoy escuchando" de "estoy grabando
+    /// silencio", que es el pedido entero. La cuenta no se hace acá: el nivel lo
+    /// acumula el propio callback de audio en átomos (ver
+    /// [`mithflow_core::audio::Medidor`]) y esto sólo lo lee y lo empaqueta.
+    fn publicar_el_nivel(&self) {
+        if !superpuesta::hay_que_medir(self.estado.clave(), self.indicador) {
+            return;
+        }
+        let Some(grabadora) = self.grabadora.as_ref() else {
+            return;
+        };
+        eventos::nivel_audio(
+            &self.app,
+            NivelAudio::nuevo(
+                grabadora.tomar_nivel(),
+                grabadora.elapsed_secs(),
+                self.limite_grabacion_s,
+            ),
+        );
     }
 
     fn procesar(&mut self, mensaje: Mensaje) {
@@ -324,6 +385,26 @@ impl Director {
     /// si hay un motor ni con qué archivo. Ver [`aviso_al_cambiar_el_modelo`].
     fn aplicar_ajustes(&mut self, nuevos: Box<Ajustes>) {
         self.limite_grabacion_s = nuevos.limite_grabacion_s as f32;
+        // El indicador SÍ cambia en caliente, al revés que el tope: apagarlo es
+        // una queja ("me molesta esta ventanita") y hacerla esperar a la próxima
+        // grabación sería no atenderla. Si se apaga en medio de una, se destruye
+        // la ventana y la grabación sigue igual.
+        if nuevos.indicador != self.indicador {
+            self.indicador = nuevos.indicador;
+            superpuesta::aplicar_ajuste(&self.app, self.indicador);
+        }
+        self.indicador_posicion = nuevos.indicador_posicion.clone();
+        // Vuelve a evaluar la visibilidad con lo recién guardado: quien acaba de
+        // encender el indicador en medio de una grabación tiene que verlo ahora.
+        //
+        // La esquina nueva, en cambio, rige desde la aparición siguiente, igual
+        // que el tope de grabación: mover la ventanita de golpe mientras el
+        // usuario está dictando es un salto en la pantalla a cambio de nada, y
+        // el caso normal es elegirla con la ventanita escondida.
+        self.reflejar_el_indicador();
+        if let Some(grabadora) = self.grabadora.as_ref() {
+            grabadora.medir_nivel(self.indicador);
+        }
         if nuevos.modelo != self.modelo_elegido {
             self.modelo_elegido = nuevos.modelo.clone();
             if let Some(aviso) = aviso_al_cambiar_el_modelo(
@@ -345,6 +426,11 @@ impl Director {
             Err(e) => return self.avisar_error(&format!("No pude preparar el micrófono: {e}")),
         };
         grabadora.fijar_tope(self.limite_grabacion_s);
+        // Antes de abrir el dispositivo: el medidor tiene que estar encendido
+        // cuando llegue el primer chunk, o el primer cuadro de la ventanita
+        // saldría en cero. Con el indicador apagado esto deja el callback de
+        // audio exactamente como estaba.
+        grabadora.medir_nivel(self.indicador);
         // El micrófono ocupado por otra aplicación entra por acá. Se informa y
         // se sigue en `Listo`: no cierra nada.
         if let Err(e) = grabadora.start() {
@@ -464,7 +550,14 @@ impl Director {
     }
 
     /// Un único lugar donde el estado sale del director: espejo para los
-    /// comandos, evento para la interfaz y bandeja para cuando no hay ventana.
+    /// comandos, evento para la interfaz, bandeja y ventanita para cuando no hay
+    /// ventana principal.
+    ///
+    /// El orden no es casual: **la ventanita va última**. Mostrarla despacha al
+    /// hilo de la interfaz y espera, y lo que va antes —el espejo, el evento y
+    /// la bandeja— no tiene por qué quedar atrás de eso. En la transición que
+    /// importa (empezar a grabar) el micrófono ya está abierto y capturando
+    /// desde antes de entrar acá, así que nada de esto le come audio al usuario.
     fn publicar(&self) {
         let dto = EstadoDto::nuevo(&self.estado, self.pausado);
         println!(
@@ -475,6 +568,15 @@ impl Director {
         self.espejo.escribir(dto.clone());
         eventos::estado_cambiado(&self.app, &dto);
         bandeja::actualizar(&self.app, &dto);
+        superpuesta::reflejar(&self.app, &dto, self.indicador, &self.indicador_posicion);
+    }
+
+    /// Vuelve a evaluar si la ventanita corresponde, sin publicar nada más. Se
+    /// usa al guardar Ajustes: el estado no cambió, pero la respuesta sí puede
+    /// haber cambiado.
+    fn reflejar_el_indicador(&self) {
+        let dto = EstadoDto::nuevo(&self.estado, self.pausado);
+        superpuesta::reflejar(&self.app, &dto, self.indicador, &self.indicador_posicion);
     }
 
     /// Informa un problema recuperable: tono, evento y registro. **Nunca cambia

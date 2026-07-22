@@ -1245,3 +1245,248 @@ tenerlo.
 - `cargo clippy --workspace --all-targets -- -D warnings`: limpio.
 - `npm run build`: sin errores de TypeScript.
 - Instalador NSIS regenerado y copiado a `D:\MithFlow\instalador\`.
+
+---
+
+## Plan 6 — la ventanita de grabación (indicador flotante)
+
+### El pedido, con las palabras del usuario
+
+> "Cada vez que aprieto F9 para poder hablar me gustaría que aparezca un iconito
+> como tiene Wispr Flow, que muestre el gráfico de que se está hablando, en
+> alguna parte de la compu. Porque si no tengo abierta la aplicación no me doy
+> cuenta si dice grabando o no grabando, y por ahí estoy hablando al pedo."
+
+Hasta acá la única realimentación con la ventana principal cerrada —que es como
+se usa esta app casi siempre— eran los cuatro tonos. **Un tono dice "arrancó", no
+dice "te estoy escuchando".** Quien tiene el micrófono silenciado por Windows, o
+el auricular equivocado como entrada por defecto, escucha exactamente lo mismo
+que quien está dictando bien, y se entera recién cuando no aparece ningún texto.
+
+### La restricción innegociable: no puede tomar el foco
+
+MithFlow pega el texto en la ventana que el usuario tenga enfocada. Una ventanita
+que se lleve el foco mueve el cursor de texto y el dictado termina en otro lado —
+que es **exactamente** el defecto que el proyecto ya resolvió una vez suprimiendo
+la tecla con `rdev::grab`.
+
+Se cierra por cuatro vías, y ninguna sobra:
+
+| Vía | Qué hace | Por qué no alcanza sola |
+|---|---|---|
+| `focusable(false)` | `WS_EX_NOACTIVATE` en el `CreateWindowEx` | — es **la** garantía |
+| `focused(false)` | `SW_SHOWNOACTIVATE` en el primer `show`; y en wry, saltea el `MoveFocus` inicial del WebView2 | `tao` **consume** la marca `MARKER_DONT_FOCUS` al primer `show`: del segundo en adelante usa `SW_SHOW`, que activa |
+| `set_ignore_cursor_events(true)` | `WS_EX_TRANSPARENT`: los clics la atraviesan | no es sobre el foco, pero una ventanita que come clics en el medio de la pantalla es peor que no tenerla |
+| nunca llamar a `set_focus` | — | la ventana principal tiene `ventana::enfocar`; ésta no tiene equivalente y no debe tenerlo |
+
+**Hallazgo — `focused(false)` sin `focusable(false)` habría robado el foco a
+partir de la SEGUNDA grabación.** En `tao 0.35.3`
+(`platform_impl/windows/window_state.rs:327-337`), `set_window_flags` usa
+`SW_SHOWNOACTIVATE` sólo si `MARKER_DONT_FOCUS` está puesta —y la apaga en el
+acto—; después vuelve a `SW_SHOW`. La primera grabación se habría visto bien y de
+la segunda en adelante el cursor se iría del campo de texto. Es el defecto de
+peor clase posible acá: intermitente, y se lleva puesto el dictado del usuario.
+
+### Cómo se verificó (spike, sin arrancar MithFlow)
+
+No se puede probar con tests unitarios y no se podía arrancar la app —el usuario
+la tiene abierta y usándola—, así que se hizo un spike aparte:
+`spike-superpuesta/`. Crea una ventana con **exactamente** las mismas opciones,
+sobre la misma versión de `tao` que usa Tauri 2.11, y mide con Win32 lo que de
+verdad importa. Con el foco en el editor del usuario:
+
+```text
+ventana enfocada al arrancar: «Revisar documentación y … - Cosmo-Gestion - Cursor»
+foco de teclado / cursor de texto de ese hilo: (329340, 0)
+
+PASA WS_EX_NOACTIVATE en el estilo extendido  (GWL_EXSTYLE = 0x080c0138)
+PASA WS_EX_TRANSPARENT (los clics la atraviesan)
+PASA el foco no se movió tras «primer show»
+PASA el foco no se movió tras «hide»
+PASA el foco no se movió tras «SEGUNDO show (el que usa SW_SHOW)»
+PASA la ventanita no tiene el foco de teclado
+
+OK: la ventanita no le puede robar el foco al usuario.
+```
+
+`GetForegroundWindow` y el `hwndFocus` del hilo de la otra aplicación
+(`GetGUIThreadInfo`, que es donde vive el cursor de texto) **no se movieron** en
+ninguno de los tres pasos. El paso del segundo `show` es el que justifica todo el
+spike: es el que se escapaba.
+
+Del lado del WebView2, la otra puerta posible, `wry 0.55.1` sólo llama a
+`MoveFocus` en dos lugares: al crear la vista **si `attributes.focused`**
+(`webview2/mod.rs:546`), y al recibir `WM_SETFOCUS` en la ventana padre
+(`:1255`). `WebviewWindowBuilder::focused(false)` apaga el primero —pone el flag
+en el builder de la ventana **y** en el del webview
+(`tauri/src/webview/webview_window.rs:535-539`)— y `WS_EX_NOACTIVATE` impide el
+segundo, porque el padre nunca pasa a primer plano.
+
+### De dónde sale el nivel de audio
+
+De `mithflow_core::audio::Medidor`, nuevo: **lo escribe el propio callback de
+`cpal` en átomos y lo lee el director sin lock**.
+
+La alternativa era que el director tomara el `Mutex` del buffer veinticinco veces
+por segundo para mirarle la cola. Ese mutex es el que toma el callback en cada
+chunk, y el callback de audio no puede esperar a nadie: lo que se pierde cuando
+se pasa del plazo es audio del usuario. Acá el callback suma una pasada por el
+chunk (una multiplicación y dos sumas por muestra, contra la copia al buffer que
+ya hacía) y tres operaciones atómicas, y nadie bloquea a nadie.
+
+Tres decisiones que no son obvias:
+
+- **Se mide sobre el audio ya mezclado a mono**, igual que `downmix`, y no sobre
+  las muestras intercaladas: es lo que va a recibir el modelo, y medir el
+  intercalado daría otro número. Hay test que compara el RMS del medidor contra
+  el del audio real.
+- **La suma de cuadrados se acumula en `f64`.** En `f32`, una grabación de tres
+  minutos pierde los aportes chicos contra un acumulador grande.
+- **Se puede apagar.** `Medidor::activar(false)` hace que el callback lea un
+  `bool` y vuelva. Es lo que sostiene la promesa de Ajustes: quien desactiva el
+  indicador no paga **nada** por él — ni ventana, ni eventos, ni ciclos en el
+  camino crítico del audio.
+
+**Cada cuánto se emite:** 25 veces por segundo (`director::LATIDO_CON_MEDIDOR`,
+40 ms) y **sólo mientras se graba con el indicador activado**. Sin eso el
+director sigue con su latido de siempre (250 ms). En `transcribiendo` la
+ventanita se queda a la vista pero el micrófono ya está cerrado: seguir emitiendo
+sería mandar ceros. El evento `nivel-audio` es el único del sistema **sin comando
+espejo**, y a propósito: no cuenta un hecho que haya que reconstruir al abrir una
+ventana, sino el instante que está pasando. Un nivel viejo no significa nada.
+
+### Lo que decide Rust y lo que dibuja el frontend
+
+Las tres reglas viajan calculadas en el evento, por la misma razón que las
+métricas del dashboard: se pueden equivocar, así que tienen que poder probarse.
+
+- **`intensidad(rms)`** — la altura de la barra, de 0 a 1, en escala logarítmica.
+  En lineal la voz vive pegada al piso: el ruido de fondo mide 0,0029 y la voz
+  0,071, y con el eje de 0 a 1 las dos son la misma raya de un píxel. Con la
+  escala −60 dBFS → −12 dBFS quedan: silencio 0 %, ruido de fondo ~19 %, umbral
+  de voz ~42 %, voz normal ~77 %, voz fuerte 100 %.
+- **`hay_voz(rms)`** — **el mismo umbral con el que el motor decide si
+  transcribe** (`config::MIN_SPEECH_RMS`, vía `stt::tiene_voz`), no uno propio.
+  Un indicador que se pone verde con un audio que después vuelve como "no se
+  escuchó nada" es peor que no tener indicador. Hay test que barre amplitudes y
+  exige que las dos funciones contesten lo mismo.
+- **`cerca_del_tope(pasados, limite)`** — proporcional y acotada (15 % del tope,
+  entre 5 s y 30 s), porque el tope es configurable entre 15 s y 10 minutos: un
+  aviso fijo de 20 s estaría prendido desde el arranque con el tope mínimo.
+
+### Dónde aparece
+
+`superpuesta::esquina` es una función pura sobre el **área de trabajo** del
+monitor —no sobre su resolución: abajo y centrada sobre la resolución quedaría
+debajo de la barra de tareas, o sea escondida justo en la posición por defecto—.
+Al ser pura se prueba sin Tauri y sin un segundo monitor enchufado, que es
+exactamente la parte que se equivoca: un monitor a la izquierda del principal
+tiene origen **negativo**, y una pantalla al 150 % informa el área en físicos
+mientras la ventana se pide en lógicos.
+
+El monitor se elige **por dónde está el puntero** (`cursor_position` →
+`monitor_from_point`), con caída a `current_monitor` y después a
+`primary_monitor`: quien tiene dos pantallas dicta en la que está mirando, y ahí
+es donde está el mouse. Se recalcula en **cada** aparición y no una vez al
+crearla, porque el usuario puede haberse mudado de monitor desde la grabación
+anterior.
+
+Las tres posiciones que ofrece Ajustes —abajo centrada (la de fábrica), arriba
+centrada y abajo a la derecha— salen del backend
+(`superpuesta::POSICIONES` → `Catalogo`), no de una lista escrita a mano en el
+frontend que se desincronizaría.
+
+### Por qué se crea al arrancar y no al apretar la tecla
+
+Crear una ventana con su webview cuesta decenas de milisegundos y hay un
+presupuesto de latencia de 900 ms (hoy en ~480). Se crea escondida en
+`main::preparar` y apretar la tecla no hace más que moverla y mostrarla.
+
+El orden dentro de `Director::empezar_a_grabar` deja el indicador **después** de
+que el micrófono ya esté abierto y capturando, y `publicar()` lo pone **último**,
+detrás del espejo, el evento y la bandeja: mostrar una ventana despacha al hilo
+de la interfaz y espera, y nada de lo anterior tiene por qué quedar atrás de eso.
+Del otro lado —al terminar— el hide ocurre en la transición a `Listo`, que llega
+**después** de que el motor ya pegó el texto: cero impacto en el camino que el
+usuario cronometra.
+
+`reflejar` además contesta rápido cuando no hay nada que cambiar (un átomo
+`A_LA_VISTA`, no un `is_visible()` que despacharía al hilo principal y
+esperaría), porque el director publica también al pausar y al despausar.
+
+### Qué ve el usuario
+
+| Momento | Ventanita |
+|---|---|
+| aprieta la tecla | aparece abajo y centrada: punto rojo latiendo, "Grabando", reloj en `0:00` |
+| habla | las barras se llenan **en teal** y siguen la cadencia del habla |
+| se calla | las barras bajan a ~19 % y se ponen **grises**: sigue grabando, pero no hay voz |
+| se acerca al tope | el reloj pasa a ámbar y en negrita |
+| suelta la tecla | punto ámbar, "Transcribiendo…", el medidor se aplana y respira, el reloj queda clavado en cuánto duró |
+| llega el texto (o falla) | desaparece |
+
+Las capturas de los cuatro estados están en `docs/capturas/`, sacadas con
+`superpuesta-mock.html` (backend simulado, sin micrófono y sin arrancar la app).
+
+### Detalles que costaron su comentario
+
+- **La ventanita se rearma en "Grabando" con cualquier estado que no sea
+  `transcribiendo`.** Sin eso, el dictado siguiente arrancaría mostrando
+  "Transcribiendo…" —lo último que quedó— hasta que llegara el primer nivel 40 ms
+  después. Y `nivel-audio` también fuerza el modo, así que un `estado-cambiado`
+  perdido no puede dejar el rótulo mintiendo.
+- **El medidor no pasa por React.** Veinticinco cuadros por segundo × treinta
+  barras serían setecientos elementos por segundo de reconciliación. Las barras
+  se montan una vez y después se les toca el `transform`. React sólo se entera
+  del modo, de si hay voz y del reloj, que cambia una vez por segundo.
+- **Sin `StrictMode` en la entrada de la ventanita**, al revés que la principal:
+  en desarrollo monta dos veces cada componente, y acá eso significa suscribirse
+  dos veces a `nivel-audio` y correr la historia del medidor de a dos posiciones
+  por cuadro.
+- **`destroy()` y no `close()`** al desactivar el indicador: `close` pide permiso
+  con un `CloseRequested`, y el manejador de `main` lo cancela para que cerrar la
+  ventana principal esconda en vez de terminar la app. Ese manejador ahora está
+  acotado a la ventana `main` por la misma razón.
+- **El indicador se aplica en caliente**, al revés que el tope de grabación:
+  apagarlo es una queja ("me molesta esta ventanita") y hacerla esperar a la
+  próxima grabación sería no atenderla.
+- **Capability propia** (`capabilities/superpuesta.json`) con **sólo**
+  `core:event:default`: la ventanita escucha eventos y nada más. No lee ajustes,
+  no descarga y no mueve ventanas. Es una ventana que está siempre por encima de
+  todo: cuanto menos pueda hacer, mejor.
+- **Dos entradas en Vite** (`index.html` y `superpuesta.html`) para que la
+  ventanita no arrastre el dashboard: su bundle propio son 1,6 kB. `mock.html` y
+  `superpuesta-mock.html` siguen fuera del build, y `dist/` sigue sin contener
+  `MITHFLOW_SIMULADO`.
+
+### Lo que NO se hizo, y por qué
+
+- **Quitarla del Alt+Tab.** `skip_taskbar` de `tao` usa `ITaskbarList::DeleteTab`,
+  que saca el botón de la barra de tareas pero no necesariamente de la lista de
+  Alt+Tab; para eso haría falta `WS_EX_TOOLWINDOW`, que Tauri no expone y
+  obligaría a meter Win32 crudo en el crate de la app. Es cosmético y está
+  acotado: la ventana existe sólo durante el dictado y, si alguien la eligiera
+  desde Alt+Tab, `WS_EX_NOACTIVATE` impide que se active igual.
+- **Un medidor con historial largo o con espectro.** Treinta barras de 1,2 s
+  alcanzan para ver la cadencia del habla; más sería decoración compitiendo con
+  el dato, que es la misma regla del resto de la interfaz.
+- **Arrastrar la ventanita con el mouse.** Sería incompatible con
+  `WS_EX_TRANSPARENT`, que es lo que hace que los clics lleguen a lo que hay
+  debajo. Se elige la esquina desde Ajustes.
+
+### Verificación
+
+- `cargo test --workspace`: **102 núcleo + 104 app** (eran 94 y 86). Los 26
+  nuevos cubren: el RMS del medidor contra el del audio que ve el modelo, la
+  mezcla de canales, la coincidencia con el umbral del motor, el reinicio de la
+  ventana por lectura, el apagado, y una muestra `NaN` que no puede envenenar el
+  indicador; la altura de la barra (monotonía, cotas, separación visible entre
+  silencio, ruido y voz, y dónde cae el umbral); el aviso del tope con los tres
+  topes configurables y con valores imposibles; la visibilidad por estado y por
+  ajuste; la posición desconocida que cae en la de fábrica; y la ubicación en las
+  tres posiciones, en un segundo monitor a derecha y a izquierda, con la pantalla
+  al 150 % y en un monitor más chico que la propia ventanita.
+- `spike-superpuesta`: la garantía del foco, medida con Win32 (arriba).
+- `cargo clippy --workspace --all-targets -- -D warnings`: limpio.
+- `npm run build`: sin errores de TypeScript.
+- Instalador NSIS regenerado y copiado a `D:\MithFlow\instalador\`.

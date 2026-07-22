@@ -39,6 +39,7 @@ mod eventos;
 mod motor;
 mod rutas;
 mod sonidos;
+mod superpuesta;
 mod ventana;
 
 use crate::director::{AlDirector, Mensaje};
@@ -87,9 +88,17 @@ fn main() {
         .setup(preparar)
         // Cerrar la ventana esconde, no termina: esta app vive en la bandeja y
         // cerrar la vista no puede dejar al usuario sin atajo sin avisarle.
+        //
+        // Sólo la principal: la ventanita de grabación se cierra a propósito
+        // cuando el usuario desactiva el indicador, y cancelarle el cierre acá
+        // la dejaría viva para siempre.
         .on_window_event(|ventana, evento| {
-            if let WindowEvent::CloseRequested { api, .. } = evento {
-                api.prevent_close();
+            if matches!(evento, WindowEvent::CloseRequested { .. })
+                && ventana.label() == ventana::PRINCIPAL
+            {
+                if let WindowEvent::CloseRequested { api, .. } = evento {
+                    api.prevent_close();
+                }
                 if let Err(e) = ventana.hide() {
                     eprintln!("no pude esconder la ventana: {e}");
                 }
@@ -129,6 +138,13 @@ fn preparar(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
 
     let (al_director, cola) = mpsc::channel::<Mensaje>();
     bandeja::construir(&handle)?;
+
+    // La ventanita se crea ACÁ, escondida, y no al apretar la tecla: crear una
+    // ventana con su webview cuesta decenas de milisegundos, y el atajo tiene un
+    // presupuesto de latencia que respetar. Después, empezar a grabar no hace
+    // más que moverla y mostrarla. Si el indicador está desactivado no se crea
+    // nada. Que falle no es fatal: se dicta igual, sólo sin indicador.
+    superpuesta::aplicar_ajuste(&handle, cfg.indicador);
 
     let espejo = Arc::new(EstadoCompartido::nuevo());
     handle.manage(Arc::clone(&espejo));

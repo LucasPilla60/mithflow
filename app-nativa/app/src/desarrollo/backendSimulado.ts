@@ -203,6 +203,8 @@ const AJUSTES: Ajustes = {
   modo_limpieza: "rapido",
   limite_grabacion_s: 180,
   guardar_texto: true,
+  indicador: true,
+  indicador_posicion: "abajo-centro",
 };
 
 const PERFIL: PerfilDto = {
@@ -286,6 +288,9 @@ export function instalarBackendSimulado(escenario: Escenario) {
     modelo_de_perfilado: "Q4_K_M",
     limite_grabacion_minimo: 15,
     limite_grabacion_maximo: 600,
+    // Las mismas claves que `superpuesta::POSICIONES`, en el mismo orden: la
+    // primera es la de fábrica.
+    posiciones_indicador: ["abajo-centro", "arriba-centro", "abajo-derecha"],
     version: "1.0.0",
   });
 

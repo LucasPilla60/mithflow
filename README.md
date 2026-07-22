@@ -35,6 +35,17 @@ Trae además ventana propia con dashboard e historial, ajustes (tecla, sonidos,
 vocabulario, arranque con Windows) y un asistente de primer arranque que mide la
 máquina y recomienda qué modelo bajar.
 
+**Indicador de grabación.** Al apretar la tecla aparece una ventanita chica
+—abajo y centrada por defecto— con el nivel de lo que entra por el micrófono y
+el tiempo que llevás grabando. Las barras se ponen **teal cuando hay voz** y
+**grises cuando sólo hay ruido de fondo**, con el mismo umbral que usa el motor
+para decidir si vale la pena transcribir: sirve para darse cuenta de que el
+micrófono está silenciado o de que la entrada es el auricular equivocado, sin
+tener la ventana abierta. Cuando soltás la tecla se queda en "Transcribiendo…"
+hasta que llega el texto. **No toma el foco ni recibe clics**: el cursor se queda
+donde estabas escribiendo. Se puede mover de esquina o apagar del todo desde
+Ajustes.
+
 ### Instalación
 
 El instalador se llama **`MithFlow_1.0.0_x64-setup.exe`**. No está en el repo

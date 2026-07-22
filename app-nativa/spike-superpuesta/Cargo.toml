@@ -1,0 +1,15 @@
+[package]
+name = "spike-superpuesta"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# La misma versión que usa Tauri 2.11 por debajo (`tauri-runtime-wry` → `tao`):
+# la garantía que se verifica acá es de esta implementación, no de "tao" en
+# abstracto. Si Tauri sube de versión, este spike hay que volver a correrlo.
+tao = "0.35.3"
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Input_KeyboardAndMouse",
+] }

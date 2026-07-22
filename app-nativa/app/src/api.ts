@@ -105,6 +105,10 @@ export interface Ajustes {
   modo_limpieza: string;
   limite_grabacion_s: number;
   guardar_texto: boolean;
+  /** La ventanita que aparece al grabar. */
+  indicador: boolean;
+  /** Una de `Catalogo.posiciones_indicador`. */
+  indicador_posicion: string;
 }
 
 /** Espejo de `comandos::ModeloDto`. */
@@ -124,6 +128,8 @@ export interface Catalogo {
   modelo_de_perfilado: string;
   limite_grabacion_minimo: number;
   limite_grabacion_maximo: number;
+  /** Dónde puede aparecer la ventanita de grabación. La primera es la de fábrica. */
+  posiciones_indicador: string[];
   version: string;
 }
 

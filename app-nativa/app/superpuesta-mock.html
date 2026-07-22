@@ -1,0 +1,40 @@
+<!doctype html>
+<!--
+  La ventanita de grabación con el backend simulado, para poder mirarla y sacarle
+  capturas en un navegador común — sin micrófono, sin modelo y sin arrancar la
+  app, que el usuario tiene abierta todo el día.
+
+  NO se empaqueta: `vite build` compila sólo `index.html` y `superpuesta.html`
+  (ver `vite.config.ts`), así que ni este archivo ni nada de `src/desarrollo/`
+  entra al `dist/` que lleva Tauri.
+
+  Escenarios: ?escenario=hablando | silencio | transcribiendo | cerca-del-tope
+-->
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MithFlow — indicador (simulado)</title>
+    <style>
+      /* La ventana real mide 232x64 y es transparente. Acá se dibuja sobre un
+         fondo cualquiera y a ese tamaño exacto, para que la captura muestre lo
+         que se va a ver de verdad y no una versión estirada. */
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        background: #202531;
+      }
+      #root {
+        width: 232px;
+        height: 64px;
+      }
+    </style>
+  </head>
+
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/desarrollo/superpuesta.tsx"></script>
+  </body>
+</html>

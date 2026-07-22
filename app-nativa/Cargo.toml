@@ -10,7 +10,7 @@ members = ["crates/core", "crates/cli", "app/src-tauri"]
 # app las encuentra al lado de su ejecutable sin copiarlas de nuevo, y no hay
 # que recompilar whisper.cpp con sus shaders de Vulkan por segunda vez.
 default-members = ["crates/core", "crates/cli"]
-exclude = ["spike", "spike-hotkey"]
+exclude = ["spike", "spike-hotkey", "spike-superpuesta"]
 resolver = "2"
 
 [workspace.package]

@@ -32,6 +32,7 @@ import {
   bytesEnMegas,
   minutosYSegundos,
   nombreDeModo,
+  nombreDePosicion,
   numero,
   pesoDeArchivo,
 } from "../formato";
@@ -200,6 +201,48 @@ export default function VistaAjustes({ alCambiarCatalogo, avisar }: Props) {
           />
           <span className="cifra">{minutosYSegundos(borrador.limite_grabacion_s)}</span>
         </Campo>
+      </section>
+
+      <section className="seccion">
+        <h2>Indicador de grabación</h2>
+        <p className="porque">
+          Una ventanita chica que aparece mientras dictás, con el nivel de lo que
+          entra por el micrófono y el tiempo que llevás. Existe para cuando no
+          tenés MithFlow abierto: sin ella, los tonos avisan que la grabación
+          arrancó pero no que te esté escuchando, y se puede hablar cinco minutos
+          al pedo con el micrófono equivocado. No toma el foco ni recibe clics:
+          el cursor se queda donde estabas escribiendo.
+        </p>
+
+        <div className="separado">
+          <Campo
+            rotulo="Mostrar la ventanita"
+            ayuda="Apagada no se crea ninguna ventana y no se mide ningún nivel."
+          >
+            <Interruptor
+              activo={borrador.indicador}
+              alCambiar={(v) => cambiar("indicador", v)}
+              etiqueta={borrador.indicador ? "Sí, mostrarla" : "No mostrarla"}
+            />
+          </Campo>
+
+          <Campo
+            rotulo="Dónde aparece"
+            ayuda="En la pantalla donde tengas el mouse, para que en dos monitores salga en el que estás mirando."
+          >
+            <select
+              value={borrador.indicador_posicion}
+              disabled={!borrador.indicador}
+              onChange={(e) => cambiar("indicador_posicion", e.currentTarget.value)}
+            >
+              {catalogo.posiciones_indicador.map((p) => (
+                <option key={p} value={p}>
+                  {nombreDePosicion(p)}
+                </option>
+              ))}
+            </select>
+          </Campo>
+        </div>
       </section>
 
       <section className="seccion">

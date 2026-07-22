@@ -1,0 +1,22 @@
+<!doctype html>
+<!--
+  La ventanita de grabación. Es una entrada aparte de Vite —y no una ruta de
+  `index.html`— para que no arrastre el dashboard entero: lo único que tiene que
+  hacer es dibujar unas barras veinticinco veces por segundo.
+
+  El `<body>` va transparente: la ventana se crea con `transparent(true)` y las
+  esquinas redondeadas las dibuja el CSS. Sin esto se vería un rectángulo negro
+  alrededor de la tarjeta.
+-->
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MithFlow — grabando</title>
+  </head>
+
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/superpuesta/main.tsx"></script>
+  </body>
+</html>

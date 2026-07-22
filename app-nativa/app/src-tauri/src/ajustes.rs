@@ -70,6 +70,14 @@ fn sonidos_por_defecto() -> bool {
     true
 }
 
+fn indicador_por_defecto() -> bool {
+    true
+}
+
+fn posicion_del_indicador_por_defecto() -> String {
+    crate::superpuesta::POSICIONES[0].to_string()
+}
+
 fn volumen_por_defecto() -> f32 {
     crate::sonidos::VOLUMEN_POR_DEFECTO
 }
@@ -134,6 +142,16 @@ pub struct Ajustes {
     /// programa que deja en claro, en el disco, todo lo que el usuario dijo.
     #[serde(default = "guardar_texto_por_defecto")]
     pub guardar_texto: bool,
+    /// La ventanita que aparece al grabar (ver `superpuesta`).
+    ///
+    /// Encendida por defecto: es la única realimentación visual que existe con
+    /// la ventana principal cerrada, que es como se usa esta app casi siempre.
+    /// Apagada no se crea ninguna ventana ni se mide ningún nivel.
+    #[serde(default = "indicador_por_defecto")]
+    pub indicador: bool,
+    /// Dónde aparece: una de [`crate::superpuesta::POSICIONES`].
+    #[serde(default = "posicion_del_indicador_por_defecto")]
+    pub indicador_posicion: String,
 }
 
 impl Default for Ajustes {
@@ -151,6 +169,8 @@ impl Default for Ajustes {
             modo_limpieza: modo_limpieza_por_defecto(),
             limite_grabacion_s: limite_grabacion_por_defecto(),
             guardar_texto: guardar_texto_por_defecto(),
+            indicador: indicador_por_defecto(),
+            indicador_posicion: posicion_del_indicador_por_defecto(),
         }
     }
 }
@@ -191,6 +211,13 @@ impl Ajustes {
         self.limite_grabacion_s = self
             .limite_grabacion_s
             .clamp(LIMITE_GRABACION_MINIMO, LIMITE_GRABACION_MAXIMO);
+        // Una posición desconocida cae en la de fábrica. `superpuesta::esquina`
+        // ya trata lo que no reconoce como el default, pero acotarlo también acá
+        // es lo que hace que Ajustes muestre la opción que de verdad está
+        // vigente en vez de un desplegable en blanco.
+        if !crate::superpuesta::POSICIONES.contains(&self.indicador_posicion.as_str()) {
+            self.indicador_posicion = posicion_del_indicador_por_defecto();
+        }
     }
 
     /// El modo de limpieza como lo entiende el núcleo.
@@ -276,6 +303,49 @@ mod tests {
         assert_eq!(a.modo_limpieza, "rapido");
         assert_eq!(a.limite_grabacion_s, 180);
         assert!(a.guardar_texto, "el historial guarda el texto salvo que se apague");
+        assert!(
+            a.indicador,
+            "sin la ventanita, quien no tiene la app abierta no sabe si está grabando"
+        );
+        assert_eq!(a.indicador_posicion, "abajo-centro");
+    }
+
+    /// La posición del indicador se valida contra la lista del módulo que la
+    /// usa: un archivo editado a mano no puede mandar la ventanita a ningún
+    /// lado.
+    #[test]
+    fn normalizar_acepta_las_posiciones_conocidas_y_rechaza_el_resto() {
+        for conocida in crate::superpuesta::POSICIONES {
+            let mut a = Ajustes {
+                indicador_posicion: (*conocida).to_string(),
+                ..Default::default()
+            };
+            a.normalizar();
+            assert_eq!(&a.indicador_posicion, conocida);
+        }
+        for inventada in ["en-el-techo", "", "ABAJO-CENTRO"] {
+            let mut a = Ajustes {
+                indicador_posicion: inventada.to_string(),
+                ..Default::default()
+            };
+            a.normalizar();
+            assert_eq!(
+                a.indicador_posicion, "abajo-centro",
+                "'{inventada}' tenía que caer en la de fábrica"
+            );
+        }
+    }
+
+    /// Un `ajustes.json` de la versión anterior no tiene estos campos: tiene que
+    /// leerse igual y quedar con el indicador encendido, que es el default.
+    #[test]
+    fn un_archivo_sin_los_campos_del_indicador_lo_deja_encendido() {
+        let json = serde_json::json!({ "tecla": "F9", "limite_grabacion_s": 120 });
+        let mut a: Ajustes = serde_json::from_value(json).expect("faltar campos no es un error");
+        a.normalizar();
+        assert!(a.indicador);
+        assert_eq!(a.indicador_posicion, "abajo-centro");
+        assert_eq!(a.limite_grabacion_s, 120, "lo que sí venía se respeta");
     }
 
     /// El modo del archivo se traduce al del núcleo, y una basura cae en el

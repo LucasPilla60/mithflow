@@ -18,7 +18,7 @@ use crate::director::{AlDirector, Mensaje};
 use crate::estado::{EstadoCompartido, EstadoDto};
 use crate::eventos::{self, ProgresoDescarga};
 use crate::sonidos::Sonidos;
-use crate::{atajo, motor, rutas};
+use crate::{atajo, motor, rutas, superpuesta};
 use mithflow_core::history::Entry;
 use mithflow_core::models::{self, Modelo};
 use mithflow_core::{hardware, history, metricas};
@@ -260,6 +260,9 @@ pub struct Catalogo {
     pub modelo_de_perfilado: &'static str,
     pub limite_grabacion_minimo: u32,
     pub limite_grabacion_maximo: u32,
+    /// Dónde puede aparecer la ventanita de grabación. Sale del módulo que la
+    /// dibuja, para que Ajustes no ofrezca una posición que nadie sabe ubicar.
+    pub posiciones_indicador: Vec<&'static str>,
     pub version: String,
 }
 
@@ -296,6 +299,7 @@ pub fn leer_catalogo() -> Catalogo {
         modelo_de_perfilado: clave_modelo(Modelo::DE_PERFILADO),
         limite_grabacion_minimo: ajustes::LIMITE_GRABACION_MINIMO,
         limite_grabacion_maximo: ajustes::LIMITE_GRABACION_MAXIMO,
+        posiciones_indicador: superpuesta::POSICIONES.to_vec(),
         version: env!("CARGO_PKG_VERSION").to_string(),
     }
 }

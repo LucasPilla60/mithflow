@@ -83,3 +83,20 @@ export function nombreDeModo(modo: string): string {
   };
   return nombres[modo] ?? modo;
 }
+
+/**
+ * Nombre de una posición de la ventanita de grabación.
+ *
+ * La lista de claves la manda el backend (`superpuesta::POSICIONES`); acá sólo
+ * se traducen. Una clave que no esté en esta tabla se muestra tal cual en vez de
+ * desaparecer del desplegable: es mejor una opción con nombre feo que una opción
+ * que no se puede elegir.
+ */
+export function nombreDePosicion(posicion: string): string {
+  const nombres: Record<string, string> = {
+    "abajo-centro": "Abajo, centrada",
+    "arriba-centro": "Arriba, centrada",
+    "abajo-derecha": "Abajo a la derecha",
+  };
+  return nombres[posicion] ?? posicion;
+}
