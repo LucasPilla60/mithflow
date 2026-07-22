@@ -559,9 +559,9 @@ falla con `backend error (status 8)`. Se resolvió como documenta el README de
 `transcribe-libs/` todavía vacío la compilación aborta con
 `glob pattern transcribe-libs/* path not found or didn't match any files`.
 
-*Falta verificar con un `tauri build` real (Plan 5): acá se comprobó que las
-DLLs quedan junto al ejecutable y que el glob resuelve, no el contenido del
-instalador.*
+*Verificado con un `tauri build` real en el Plan 5: las 13 DLLs están adentro
+del instalador y la app instalada las carga desde su propia carpeta. Ver
+"Plan 5 — el instalador" más abajo.*
 
 ### HALLAZGO: `cargo build --release` a secas da un binario de desarrollo
 
@@ -646,3 +646,116 @@ respondió, o sea que la CSP no bloquea el webview y los comandos resuelven su
 estado manejado).
 
 **No se probó el dictado real** (necesita micrófono y foco): lo hace el usuario.
+
+---
+
+## Plan 5 — el instalador (21/7/2026)
+
+### El riesgo del Plan 3 quedó cerrado: las 13 DLLs SÍ entran
+
+Era la incógnita central del empaquetado. `7z l` sobre
+`MithFlow_1.0.0_x64-setup.exe` lista las 13, y las 13 tienen el **mismo SHA-256**
+que las de `target/release/`:
+
+```
+mithflow.exe               19.337.216
+ggml-base.dll                 640.512
+ggml-cpu-alderlake.dll        889.344
+ggml-cpu-cannonlake.dll       994.304
+ggml-cpu-cascadelake.dll      993.280
+ggml-cpu-haswell.dll          891.392
+ggml-cpu-icelake.dll          993.280
+ggml-cpu-sandybridge.dll      834.560
+ggml-cpu-skylakex.dll         994.304
+ggml-cpu-sse42.dll            754.688
+ggml-cpu-x64.dll              756.224
+ggml-vulkan.dll            74.008.576
+ggml.dll                       66.560
+transcribe.dll              1.604.608
+```
+
+El `installer.nsi` que genera el bundler las emite como `File` incondicionales
+dentro de `Section Install`, después de `SetOutPath $INSTDIR`: quedan al lado del
+ejecutable, que es donde `init_backends_default()` las busca.
+
+### La prueba que vale: instalación limpia, lejos de `target/`
+
+Se extrajo el instalador a un directorio temporal aislado y se corrió el `.exe`
+desde ahí, sin `target/release` en el `PATH`:
+
+```
+load_backend: loaded Vulkan backend from ...\instalacion-limpia\ggml-vulkan.dll
+load_backend: loaded CPU backend from ...\instalacion-limpia\ggml-cpu-haswell.dll
+whisper: using vulkan backend: Vulkan0
+motor listo sobre Vulkan0 (calentado en 0.2 s)
+estado: listo
+```
+
+Las rutas apuntan a la carpeta de instalación, **no** a `target/release`. Y no
+se queda en "cargó las DLLs": `motor listo` significa que corrió una inferencia
+real de calentamiento con ellas.
+
+**Cómo se hizo la prueba, y por qué así.** El binario de release lleva
+`windows_subsystem = "windows"`, así que no tiene consola: la salida se capturó
+con `Start-Process -RedirectStandardOutput/-RedirectStandardError`. El modelo se
+apuntó con `MITHFLOW_MODELO` porque en esta máquina `%APPDATA%\MithFlow\models\`
+está vacío — eso decide de dónde sale el **modelo**, no de dónde salen las DLLs,
+que es lo que se estaba verificando.
+
+### Tamaño real: la descarga es 12 MB, la instalación 99 MB
+
+| | Tamaño |
+|---|---|
+| `MithFlow_1.0.0_x64-setup.exe` | **12.743.287 bytes (12,15 MiB)** |
+| Contenido sin comprimir | 102.265.730 bytes (97,5 MiB) |
+| `ESTIMATEDSIZE` que declara el instalador | 101.327 KB (~99 MB) |
+
+**El pronóstico de "instalador de ~85 MB" era pesimista por un factor de 7.** Los
+84 MB de DLLs comprimen **8:1** con LZMA sólido, porque `ggml-vulkan.dll` es casi
+toda bytecode SPIR-V —muy repetitivo— y no código nativo. O sea que la
+optimización que quedaba anotada del Plan 3 (recortar las 9 variantes de CPU)
+**no hace falta**: las nueve juntas son 8,1 MB sin comprimir y aportan menos de
+1 MB a la descarga. Se dejan las nueve, que es lo que hace que un solo binario
+sirva para cualquier procesador.
+
+Hay que distinguir los dos números al comunicarlos: **12 MB es lo que el usuario
+baja, 99 MB es lo que ocupa en disco** (más el modelo, que va aparte).
+
+### Metadatos del instalador
+
+| Campo | Valor | Por qué |
+|---|---|---|
+| `productName` | MithFlow | — |
+| `version` | **1.0.0** (era 0.1.0) | primera versión empaquetada; sincronizada en `Cargo.toml` del workspace, `package.json` y el backend simulado, porque `comandos.rs` la publica al frontend con `env!("CARGO_PKG_VERSION")` |
+| `identifier` | `com.mithdata.mithflow` | **no se toca**: ya nombra `%APPDATA%\com.mithdata.mithflow\`, donde vive el historial |
+| `publisher` | MithData | sin esto, "Editor: desconocido" en el aviso de SmartScreen |
+| `copyright` | © 2026 MithData | va a los metadatos del `.exe` |
+| `category` | Productivity | — |
+| `shortDescription` / `longDescription` | en español | es lo que se ve en el instalador |
+| `targets` | **`["nsis"]`** (era `"all"`) | `"all"` intentaba también MSI, que necesita descargar WiX. La app es sólo para Windows (`rdev`, registro de Windows para el autoarranque), así que el resto de los formatos no aplica |
+| `nsis.installMode` | `currentUser` | instala en `%LOCALAPPDATA%` sin UAC. `perMachine` pediría administrador para nada: la app no escribe fuera del perfil del usuario |
+| `nsis.languages` | `["Spanish", "SpanishInternational", "English"]` | Windows en es-AR (LANGID 11274) no coincide con ninguna de las dos variantes de NSIS, así que cae en **la primera de la lista**: por eso "Spanish" va primera. Verificado: el bundler emitió `Spanish.nsh` y `SpanishInternational.nsh` |
+| `nsis.installerIcon` | `icons/icon.ico` | sin esto el instalador sale con el ícono genérico de NSIS |
+
+**Accesos directos** (leídos del `installer.nsi` generado, no asumidos): el del
+menú Inicio se crea **siempre**; el del escritorio va como casilla tildada en la
+última pantalla (`MUI_FINISHPAGE_SHOWREADME`), y se crea sin preguntar en
+instalación silenciosa o `/P`.
+
+### El instalador no va al repo
+
+Queda en `app-nativa/target/release/bundle/nsis/`, que ya está cubierto por las
+reglas `target/` y `app-nativa/target/` del `.gitignore`. No hizo falta agregar
+nada.
+
+### Deuda que sigue abierta
+
+- **Sin firma digital.** Windows muestra "Windows protegió su PC" en la primera
+  ejecución y hay que pasar por "Más información" → "Ejecutar de todas formas".
+  Está documentado en el README, que es lo único que se puede hacer sin comprar
+  un certificado.
+- **Los tres ajustes que se guardan y no se aplican** (vocabulario, muletillas,
+  modo de limpieza) siguen igual que en el Plan 3: es deuda del núcleo, no del
+  empaquetado.
+- **`allow_downgrades` queda en `true`** (el default). Con una sola versión
+  publicada no cambia nada, pero conviene revisarlo cuando haya una segunda.

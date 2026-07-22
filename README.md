@@ -7,7 +7,82 @@ Incluye un **dashboard** con analíticas de uso: cuánto dictaste, tu velocidad 
 
 ---
 
-## 📦 Instalación en otra PC o notebook
+## 🖥️ Hay dos versiones, y conviven
+
+| | **Python** (esta carpeta) | **Nativa** (`app-nativa/`) |
+|---|---|---|
+| Estado | **la que uso todos los días** | primera versión empaquetada (1.0.0) |
+| Atajo | **F8** | **F9** |
+| Motor | faster-whisper + CUDA (necesita NVIDIA para ir rápido) | whisper.cpp + Vulkan (NVIDIA, AMD o Intel) |
+| Instalación | Python 3.10+ y `instalar.ps1` | un instalador `.exe`, sin Python |
+| Interfaz | dashboard de Streamlit en el navegador | ventana propia + ícono en la bandeja |
+| Historial | `history.jsonl` | `%APPDATA%\com.mithdata.mithflow\history-nativo.jsonl` |
+
+**Las teclas y los archivos son distintos a propósito**: podés tener las dos
+corriendo al mismo tiempo sin que una toque los datos de la otra. La versión
+Python sigue documentada abajo y no se toca.
+
+### Qué es la app nativa
+
+La misma idea —apretás una tecla, hablás, el texto aparece donde está el
+cursor— pero sin Python, sin entorno virtual y sin instalar CUDA. Un solo
+instalador que trae el motor de transcripción adentro y **elige solo cómo
+acelerar en cada máquina**: Vulkan si la placa lo soporta, y si no, la variante
+de CPU que le corresponda al procesador entre nueve posibles. Por eso anda igual
+en la máquina con RTX 3080 que en una notebook con gráficos integrados.
+
+Trae además ventana propia con dashboard e historial, ajustes (tecla, sonidos,
+vocabulario, arranque con Windows) y un asistente de primer arranque que mide la
+máquina y recomienda qué modelo bajar.
+
+### Instalación
+
+El instalador se llama **`MithFlow_1.0.0_x64-setup.exe`**. No está en el repo
+(pesa de más): lo genera `npm run tauri build` desde `app-nativa/app/` y queda en
+`app-nativa/target/release/bundle/nsis/`.
+
+1. Doble clic en el instalador.
+2. ⚠️ **Windows va a mostrar "Windows protegió su PC".** Es esperable y no
+   significa que haya un virus: el instalador **no está firmado digitalmente**
+   (un certificado de firma cuesta cientos de dólares por año). Hacé clic en
+   **"Más información"** —el link chiquito debajo del texto— y después en
+   **"Ejecutar de todas formas"**.
+3. Se instala **para el usuario actual** en `%LOCALAPPDATA%\MithFlow`, sin pedir
+   permisos de administrador. Crea el acceso directo en el menú Inicio, y el del
+   escritorio si dejás tildada la casilla de la última pantalla.
+4. La primera vez **hay que descargar el modelo**: la app abre un asistente que
+   mide la máquina y recomienda cuál. Se guarda en `%APPDATA%\MithFlow\models\`.
+
+Para desinstalar: Configuración → Aplicaciones → MithFlow, o `uninstall.exe` en
+la carpeta de instalación.
+
+### Cuánto pesa
+
+| | Tamaño |
+|---|---|
+| El instalador que se descarga | **12,1 MiB** (12.743.287 bytes) |
+| Lo que ocupa ya instalado | **~99 MB** |
+| El modelo, aparte y una sola vez | 511 MB – 1,5 GB |
+
+El spec original estimaba "~20 MB" y se quedaba corto en lo instalado: el motor
+son **13 DLLs de ggml que suman 84 MB**, y `ggml-vulkan.dll` sola pesa 74 MB
+porque lleva los shaders de todas las GPU. Lo que salva el número de la descarga
+es que esos shaders comprimen casi 8:1 con LZMA, así que el `.exe` que se baja
+son 12 MB aunque en disco queden 99.
+
+### Detalles del primer arranque
+
+- **La primera transcripción de la máquina tarda ~40 s** compilando los shaders
+  de Vulkan. La app lo paga sola al arrancar, antes de que dictes; el driver
+  guarda el resultado, así que pasa una sola vez por máquina (y de nuevo si
+  actualizás el driver de la placa).
+- Si Windows no tiene **WebView2** (Windows 11 ya lo trae), el instalador lo
+  descarga solo.
+- Requiere Windows 10/11 de 64 bits.
+
+---
+
+## 📦 Instalación en otra PC o notebook (versión Python)
 
 Funciona con o sin GPU. Toda la instalación son 3 pasos.
 
@@ -162,14 +237,18 @@ Bajá `vol` en `play_tone()` si los querés aún más discretos (default `0.15`)
 
 ## ✅ Estado (21/7/2026)
 
-Funcionando end-to-end en Windows 11 + RTX 3080: dictado, pegado, sonidos, dashboard y analíticas. Probado con micrófono real.
+**Python:** funcionando end-to-end en Windows 11 + RTX 3080 — dictado, pegado, sonidos, dashboard y analíticas. Probado con micrófono real.
+
+**Nativa:** instalador 1.0.0 generado y verificado en instalación limpia (arranca, carga el motor por Vulkan y queda lista). El dictado real con micrófono todavía no se probó en la versión nativa.
 
 ## 🗺️ Roadmap
 
 1. Modo push-to-talk (mantener presionado) en vez de toggle.
 2. Perfiles de limpieza por app (email formal vs. chat casual) — lo que Wispr llama "tone matching".
-3. Empaquetarlo como .exe con ícono en la bandeja del sistema (pystray + PyInstaller).
+3. ~~Empaquetarlo como .exe con ícono en la bandeja del sistema~~ — **hecho**, pero por otro camino: en vez de PyInstaller + pystray se reescribió el motor en Rust (`app-nativa/`), que además saca la dependencia de CUDA. Ver la sección de la app nativa arriba.
 4. Migrar a Parakeet v3 (más rápido que Whisper, ya soporta español) para exprimir aún más la latencia.
+5. **Firmar el instalador nativo** para que Windows deje de mostrar SmartScreen.
+6. En la app nativa, aplicar de verdad los tres ajustes que hoy sólo se guardan (vocabulario, muletillas, modo de limpieza).
 
 ---
 

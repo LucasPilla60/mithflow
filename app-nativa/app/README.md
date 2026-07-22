@@ -33,6 +33,33 @@ cargo build --release -p mithflow-app --features custom-protocol
 modo desarrollo y busca el frontend en `http://localhost:1420`: ventana en
 blanco y ningún error visible. `npm run tauri build` la activa sola.
 
+## El instalador
+
+```powershell
+npm run tauri build
+# -> ../target/release/bundle/nsis/MithFlow_1.0.0_x64-setup.exe
+```
+
+Sale un instalador NSIS de **12,1 MiB** que ocupa **~99 MB** instalado: adentro
+van el ejecutable y **las 13 DLLs de ggml** (84 MB sin comprimir, que es el
+motor). Que estén ahí no es gratis ni automático —lo arma `build.rs` y lo declara
+`bundle.resources`— así que **verificalo, no lo asumas**:
+
+```powershell
+7z l ..\target\release\bundle\nsis\MithFlow_1.0.0_x64-setup.exe   # tienen que aparecer 13 .dll
+```
+
+La prueba que de verdad cierra el tema es extraer el instalador a un directorio
+aislado y correr el `.exe` desde ahí (sin `target/release` cerca): en la salida
+tiene que decir `load_backend: loaded Vulkan backend from <ese directorio>`. Si
+la ruta apunta a `target/release`, la prueba no vale. El binario de release no
+tiene consola (`windows_subsystem = "windows"`), así que hay que capturarla con
+`Start-Process -RedirectStandardError`.
+
+No se firma digitalmente: la primera ejecución dispara SmartScreen y hay que
+pasar por "Más información" → "Ejecutar de todas formas". Está documentado en el
+README raíz.
+
 ## La interfaz sin el backend
 
 `mock.html` levanta las mismas tres vistas contra un backend simulado
