@@ -26,13 +26,20 @@ import type {
   Metricas,
   PaginaHistorial,
   PerfilDto,
+  ResumenDesinstalacion,
 } from "../api";
 
 /** Marca para poder verificar que este módulo NO está en el build de producción. */
 export const MARCA = "MITHFLOW_SIMULADO";
 
-/** Escenarios que se pueden pedir por la barra de direcciones (`?escenario=`). */
-export type Escenario = "normal" | "primer-arranque" | "grabando";
+/**
+ * Escenarios que se pueden pedir por la barra de direcciones (`?escenario=`).
+ *
+ * `sin-instalar` es la app corriendo desde una copia de desarrollo, sin
+ * `uninstall.exe` al lado: es lo único que cambia respecto de `normal`, y está
+ * porque es el caso que ve quien programa esto al probar la desinstalación.
+ */
+export type Escenario = "normal" | "primer-arranque" | "grabando" | "sin-instalar";
 
 const FRASES = [
   "Necesito preparar el informe de cierre para el cliente antes del viernes.",
@@ -335,6 +342,41 @@ export function instalarBackendSimulado(escenario: Escenario) {
     });
   }
 
+  /**
+   * Lo que mide `desinstalar::resumen_desinstalacion`, con los números reales
+   * de una instalación del 22/7/2026: 99 MB de programa, los dos modelos que
+   * el usuario tiene bajados (`F16` + `Q4_K_M`) y sus ajustes más el historial.
+   *
+   * Los dictados salen del historial simulado y no de una constante: el número
+   * que se muestra antes de borrar tiene que ser el mismo que el dashboard.
+   *
+   * Con `?escenario=sin-instalar` no hay desinstalador, que es lo que pasa
+   * corriendo desde `target/release/`. El motivo es el texto de
+   * `desinstalar::sin_desinstalador`, copiado tal cual: un simulado que suaviza
+   * el mensaje enseña una pantalla que la app no tiene.
+   */
+  const resumenDesinstalacion = (): ResumenDesinstalacion => {
+    const instalado = escenario !== "sin-instalar";
+    const carpeta = "D:\\MithFlow\\app-nativa\\target\\release";
+    return {
+      programa_ruta: instalado ? "C:\\Users\\usuario\\AppData\\Local\\MithFlow" : null,
+      programa_bytes: instalado ? 102265730 : 0,
+      modelos_ruta: "C:\\Users\\usuario\\AppData\\Roaming\\MithFlow\\models",
+      modelos_bytes: 2162005248,
+      modelos_cantidad: 2,
+      datos_ruta: "C:\\Users\\usuario\\AppData\\Roaming\\com.mithdata.mithflow",
+      datos_bytes: 18476,
+      dictados: entradas.length,
+      hay_desinstalador: instalado,
+      motivo_sin_desinstalador: instalado
+        ? null
+        : `No encontré el desinstalador (uninstall.exe) en ${carpeta}. Pasa cuando MithFlow ` +
+          "corre desde una copia de desarrollo en vez de la instalación: no hay nada que " +
+          "desinstalar y no toqué ningún dato. Si lo instalaste con el instalador, sacalo " +
+          "desde Configuración → Aplicaciones.",
+    };
+  };
+
   /** Simula una descarga: unos tramos de progreso y el final. */
   function simularDescarga(clave: string) {
     const modelo = catalogo().modelos.find((m) => m.clave === clave);
@@ -429,6 +471,21 @@ export function instalarBackendSimulado(escenario: Escenario) {
         case "descargar_modelo":
           simularDescarga((args as { clave: string }).clave);
           return null;
+        case "resumen_desinstalacion":
+          return resumenDesinstalacion();
+        case "desinstalar": {
+          // El backend real borra, lanza `uninstall.exe` y cierra la
+          // aplicación. Acá no hay nada que borrar ni ventana que cerrar: se
+          // cuenta qué habría pasado y se deja la interfaz como quedaría.
+          const { conservar } = args as { conservar: boolean };
+          void emit("aviso", {
+            texto: conservar
+              ? "Desinstalando MithFlow. Los modelos y el historial se quedan en el disco."
+              : "Desinstalando MithFlow y borrando los modelos y el historial.",
+            nivel: "info",
+          });
+          return null;
+        }
         case "pausar":
         case "reanudar":
         case "alternar_pausa":

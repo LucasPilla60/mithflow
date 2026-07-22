@@ -20,10 +20,12 @@
 //!
 //! # Qué cierra la aplicación
 //!
-//! Sólo "Salir" en el menú de la bandeja. Ni el micrófono ocupado, ni un
-//! pegado fallido, ni una transcripción vacía, ni siquiera que no haya un
-//! modelo descargado: todo eso se informa y la app sigue viva, porque desde ahí
-//! el usuario todavía puede llegar a Ajustes y arreglarlo.
+//! "Salir" en el menú de la bandeja, y desinstalar desde Ajustes (que cierra
+//! porque el desinstalador tiene que poder borrar este ejecutable). Ni el
+//! micrófono ocupado, ni un pegado fallido, ni una transcripción vacía, ni
+//! siquiera que no haya un modelo descargado: todo eso se informa y la app
+//! sigue viva, porque desde ahí el usuario todavía puede llegar a Ajustes y
+//! arreglarlo.
 
 // Sin esto, la app de release abre una consola negra al arrancar. En debug se
 // deja a propósito: es donde salen los mensajes de diagnóstico.
@@ -33,6 +35,7 @@ mod ajustes;
 mod atajo;
 mod bandeja;
 mod comandos;
+mod desinstalar;
 mod director;
 mod estado;
 mod eventos;
@@ -84,6 +87,8 @@ fn main() {
             comandos::alternar_pausa,
             comandos::perfilar_hardware,
             comandos::descargar_modelo,
+            desinstalar::resumen_desinstalacion,
+            desinstalar::desinstalar,
         ])
         .setup(preparar)
         // Cerrar la ventana esconde, no termina: esta app vive en la bandeja y

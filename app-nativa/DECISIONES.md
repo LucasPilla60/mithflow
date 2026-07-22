@@ -1490,3 +1490,183 @@ Las capturas de los cuatro estados están en `docs/capturas/`, sacadas con
 - `cargo clippy --workspace --all-targets -- -D warnings`: limpio.
 - `npm run build`: sin errores de TypeScript.
 - Instalador NSIS regenerado y copiado a `D:\MithFlow\instalador\`.
+
+## Plan 7 — desinstalar desde adentro (22/7/2026)
+
+### El pedido, y por qué no es redundante con el desinstalador de Windows
+
+El usuario pidió "un botón para desinstalar la aplicación desde adentro, por las
+dudas". La app **ya** está bien registrada en Windows: `uninstall.exe` existe en
+`%LOCALAPPDATA%\MithFlow\` y Configuración → Aplicaciones la lista con nombre,
+versión y editor correctos. Un botón que sólo lanzara ese `.exe` no agregaría
+nada.
+
+Lo que agrega es lo que el desinstalador de NSIS **no** hace: sacar los datos.
+Medido sobre la instalación real de esta máquina el 22/7/2026:
+
+| Directorio | Qué hay | Cuánto pesa |
+|---|---|---|
+| `%APPDATA%\MithFlow\models\` | `F16` + `Q4_K_M` | **2.062 MB** |
+| `%APPDATA%\com.mithdata.mithflow\` | `ajustes.json` + `history-nativo.jsonl` | 18 KB |
+
+Desinstalar por el camino normal deja las dos carpetas huérfanas. Los 2 GB son
+disco que nadie va a volver a encontrar. El historial es peor: es **texto plano
+con todo lo que el usuario dictó**, y esta app se instala también en la notebook
+de su pareja. Un dato personal que sobrevive a la desinstalación del programa que
+lo escribió es un defecto, no una comodidad.
+
+### El orden: verificar, borrar, lanzar
+
+`desinstalar::ejecutar_desinstalacion` hace exactamente tres cosas y en este
+orden, que es lo único que hace segura la operación:
+
+1. **verificar que `uninstall.exe` existe**;
+2. borrar lo que corresponda;
+3. lanzarlo.
+
+Al revés —borrar y después descubrir que no hay desinstalador— el usuario se
+queda sin sus 2 GB de modelos **y** con la aplicación instalada, que es el peor
+de los tres desenlaces posibles. El test
+`sin_desinstalador_no_se_borra_nada_y_no_se_lanza_nada` es la garantía: apunta a
+un `uninstall.exe` inexistente, pasa un plan cuyos directorios sí existen, e
+inyecta un lanzador que paniquea si alguien lo llama. Afirma las tres cosas: que
+falla, que los archivos siguen ahí y que no se lanzó nada.
+
+El lanzamiento va **inyectado** (`impl FnOnce(&Path)`) justamente para poder
+probar ese orden sin ejecutar el desinstalador de verdad, que en esta máquina se
+llevaría puestos los 2 GB del usuario.
+
+### Cómo se garantiza que no se borra nada fuera de los dos directorios
+
+Cuatro cosas, de la más fuerte a la más débil:
+
+1. **Las rutas se piden a las funciones que las escribieron**:
+   `models::directorio()` y `rutas::dir_datos(app)`. No hay una sola
+   concatenación de cadenas en el módulo.
+2. **`remove_dir_all` sólo se llama sobre un `DirectorioBorrable`**, que es un
+   newtype privado cuyo constructor pasa por `verificar`: rechaza rutas
+   relativas, rutas con `..` en el medio y cualquier ruta sin abuelo (o sea `C:\`
+   y `C:\loquesea`). Un `remove_dir_all` de una ruta mal armada no se puede
+   escribir por descuido: no hay forma de llegar a la llamada sin construir el
+   tipo.
+3. **`PlanDeBorrado::a_borrar()` es la lista completa y es la misma que se
+   ejecuta**: `ejecutar` la recorre para dejar el rastro en la consola *y*
+   después borra por esos mismos dos campos. El test
+   `se_borran_los_dos_directorios_de_datos_y_ninguno_mas` arma un `%APPDATA%` de
+   mentira con los dos directorios **y vecinos que no son de MithFlow**
+   (`OtraApp\importante.db`, `no-es-de-mithflow.txt`), ejecuta el plan de verdad
+   contra el disco y afirma que los vecinos siguen intactos byte por byte.
+4. **El padre de los modelos (`%APPDATA%\MithFlow\`) se saca con `remove_dir` y
+   no con `remove_dir_all`**: si alguien dejó algo suyo ahí adentro, la llamada
+   falla y el directorio queda donde está. Está probado en los dos sentidos
+   (`el_padre_de_los_modelos_se_saca_solo_si_no_quedo_nada`).
+
+### El caso de desarrollo: sin `uninstall.exe` al lado
+
+El desinstalador vive en el directorio de instalación, que se resuelve con
+`current_exe().parent()`. Corriendo desde `target/release/` no hay ninguno — y es
+el caso que ve quien programa esto. Se cuenta con todas las letras en vez de
+fallar críptico:
+
+> No encontré el desinstalador (uninstall.exe) en `…`. Pasa cuando MithFlow corre
+> desde una copia de desarrollo en vez de la instalación: no hay nada que
+> desinstalar y no toqué ningún dato. Si lo instalaste con el instalador, sacalo
+> desde Configuración → Aplicaciones.
+
+En ese estado la interfaz **no ofrece la opción de borrar los datos**: borrarlos
+sin poder sacar el programa es justamente el desenlace que el orden vino a
+evitar. El escenario `?escenario=sin-instalar` del backend simulado lo reproduce
+en el navegador, con el texto copiado tal cual.
+
+La carpeta del programa tampoco se mide en ese caso: en desarrollo sería
+`target/release/`, y sus gigabytes de artefactos de compilación no son lo que se
+desinstala.
+
+### Lo que el usuario ve
+
+En Ajustes, última sección y separada del resto (borde teñido y 26 px de aire):
+la acción que se lleva puesta la aplicación entera no puede quedar pegada a un
+interruptor de todos los días.
+
+1. **Un botón** "Desinstalar MithFlow…" con la aclaración "todavía no borra nada".
+2. **Al apretarlo se mide** —tres directorios y el historial— y aparece la lista
+   de lo que se va: el programa (98 MB), los modelos (2,0 GB, 2 archivos) y los
+   ajustes más el historial (18 KB, 162 dictados), **cada uno con su ruta
+   completa**. Los tamaños salen del disco, no de un texto fijo: en la notebook
+   que sólo bajó el modelo chico el número es otro.
+3. **Dos opciones a la vista**, no una escondida: "Borrar todo" y "Conservar
+   modelos e historial". Elegir conservar apaga y tacha las dos filas
+   correspondientes de la lista — la diferencia entre las opciones dibujada, no
+   explicada.
+4. **La segunda confirmación**, con el mismo patrón de dos pasos que "Borrar el
+   historial" de la misma pantalla: el "¿Seguro?" en ámbar, el total que se
+   pierde, y el botón que dice cuál de las dos cosas va a hacer ("Sí, borrar todo
+   y desinstalar" / "Sí, desinstalar y conservar").
+
+Al confirmar: se borra lo elegido, se saca el arranque con Windows, se lanza
+`uninstall.exe` y medio segundo después la app se cierra sola.
+
+### Tres detalles que costaron su comentario
+
+- **El arranque con Windows se saca a mano.** NSIS borra la carpeta, los accesos
+  directos y la entrada de "Aplicaciones", pero no sabe nada del valor que
+  `tauri-plugin-autostart` escribe en `HKCU\...\Run`: sin esa línea quedaría
+  apuntando a un ejecutable que ya no existe y cada inicio de sesión intentaría
+  abrirlo. Va **después** de lanzar el desinstalador: si no lo hubiera, apagar el
+  autoarranque de una app que se queda instalada sería un daño gratuito.
+- **La app se cierra medio segundo después, no en el acto.** Terminar el proceso
+  adentro del comando deja el `invoke` del frontend sin resolver nunca y la
+  ventana congelada en el último cuadro. Con la pausa, la promesa resuelve, el
+  botón queda en "Desinstalando…" y recién ahí desaparece la ventana. Cerrarse es
+  obligatorio: el ejecutable vive en la carpeta que el desinstalador tiene que
+  borrar.
+- **El directorio de trabajo del desinstalador se fija en el temporal del
+  sistema**, no en el de la instalación. Un proceso con el CWD adentro de la
+  carpeta que se está borrando es cómo un desinstalador termina dejando restos.
+
+### Lo que NO se hizo, y por qué
+
+- **Lanzar el desinstalador en silencio (`/S`).** Evitaría la confirmación final
+  de Windows —que llega cuando los datos ya se borraron— pero no se puede probar
+  sin desinstalar de verdad esta instalación, que tiene los 2 GB del usuario. Se
+  lanza con su interfaz y **la pantalla lo dice**: "al confirmar borro lo que
+  elegiste y abro el desinstalador de Windows, que pide su propia confirmación
+  final. Para entonces los datos ya no están: si cancelás ahí, se cancela sacar
+  el programa, no el borrado". Es honesto y no depende de un comportamiento que
+  no se pudo verificar.
+- **Serializar la guarda de "estoy grabando" por el director.** El comando lee el
+  espejo del estado y rechaza `grabando` y `transcribiendo` sin tocar nada. Queda
+  una ventana de milisegundos entre esa lectura y el borrado en la que el atajo
+  podría arrancar una grabación; mandarlo por el canal del director la cerraría, a
+  cambio de un mensaje nuevo y una respuesta asincrónica en el único comando que
+  además termina el proceso. El daño del caso raro —una grabación que se pierde
+  mientras se desinstala la aplicación que la iba a transcribir— no lo justifica.
+- **Borrar el historial de la versión Python** (`D:\MithFlow\history.jsonl`). No
+  es de esta aplicación: lo escribe `mithflow.py`, lo lee su dashboard y esta app
+  deliberadamente nunca lo tocó (ver la nota de cabecera de `rutas.rs`).
+  Desinstalar la app nativa no puede llevarse puesto el registro de la otra.
+
+### Verificación
+
+- `cargo test --workspace`: **102 núcleo + 116 app** (eran 102 y 104). Los 12
+  nuevos cubren: que se borran exactamente los dos directorios de datos y ningún
+  vecino; que sin desinstalador no se borra nada ni se lanza nada; que con
+  desinstalador se borra **antes** de lanzar; que conservar no borra; que el
+  padre de los modelos se saca sólo si quedó vacío; que borrar dos veces no es un
+  error; que una ruta relativa, la raíz de un disco o una con `..` no se puede
+  convertir en borrable; que la ruta de modelos es la de `models::directorio()`;
+  el tamaño como suma real de un árbol con subdirectorios; el resumen completo
+  contra un árbol conocido (incluido un `.part` que ocupa pero no es un modelo);
+  el resumen sin instalación y su motivo; y que grabando o transcribiendo no se
+  desinstala.
+- `cargo clippy --workspace --all-targets -- -D warnings`: limpio.
+- `npm run build`: sin errores de TypeScript. `dist/` sigue sin contener
+  `MITHFLOW_SIMULADO`.
+- Capturas: `app/capturas/17-ajustes-desinstalar.png` (borrar todo),
+  `18-…-conservar.png` (conservar, con las filas tachadas),
+  `19-…-sin-instalador.png` (el caso de desarrollo) y `20-…-en-contexto.png` (la
+  sección al final de Ajustes, separada de Privacidad).
+- **No se ejecutó el desinstalador ni se arrancó la app**: la instalación del
+  usuario y sus 2 GB de modelos siguen intactos.
+- Instalador NSIS regenerado (12.753.318 bytes) y copiado a
+  `D:\MithFlow\instalador\`.

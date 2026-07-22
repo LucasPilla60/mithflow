@@ -45,6 +45,26 @@ export const bytesEnMegas = (bytes: number): string =>
   `${numero(bytes / (1024 * 1024))} MB`;
 
 /**
+ * Bytes a la unidad que corresponda: `1625935520` → `"1,5 GB"`, `18088` → `"18 KB"`.
+ *
+ * A diferencia de `bytesEnMegas`, que siempre dice MB porque acompaña una barra
+ * de descarga, éste se usa donde el mismo listado mezcla 2 GB de modelos con 18
+ * KB de historial: forzar los dos a megabytes dejaría el segundo en "0 MB", que
+ * es justo el número que no hay que mostrarle a alguien decidiendo si borra su
+ * historial.
+ */
+export function pesoEnBytes(bytes: number): string {
+  const KB = 1024;
+  const MB = KB * 1024;
+  const GB = MB * 1024;
+  if (!Number.isFinite(bytes) || bytes < 0) return "0 bytes";
+  if (bytes >= GB) return `${unDecimal(bytes / GB)} GB`;
+  if (bytes >= MB) return `${numero(bytes / MB)} MB`;
+  if (bytes >= KB) return `${numero(bytes / KB)} KB`;
+  return `${numero(bytes)} bytes`;
+}
+
+/**
  * Un `ts` del historial (`2026-07-21T11:49:40`, hora local sin zona) a
  * `21/07 11:49`.
  *

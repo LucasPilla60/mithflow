@@ -156,6 +156,25 @@ export interface ProgresoDescarga {
   error: string | null;
 }
 
+/**
+ * Espejo de `desinstalar::ResumenDesinstalacion`: qué se va a borrar y cuánto
+ * pesa, medido sobre este disco antes de que el usuario confirme.
+ */
+export interface ResumenDesinstalacion {
+  /** `null` cuando no hay instalación que medir (ver `hay_desinstalador`). */
+  programa_ruta: string | null;
+  programa_bytes: number;
+  modelos_ruta: string;
+  modelos_bytes: number;
+  modelos_cantidad: number;
+  datos_ruta: string;
+  datos_bytes: number;
+  dictados: number;
+  hay_desinstalador: boolean;
+  /** Por qué no lo hay. `null` cuando sí está. */
+  motivo_sin_desinstalador: string | null;
+}
+
 /** Espejo de `eventos::Aviso`. */
 export interface Aviso {
   texto: string;
@@ -200,6 +219,21 @@ export const perfilarHardware = () => invoke<void>("perfilar_hardware");
 /** Vuelve enseguida: el avance llega por `progreso-descarga`. */
 export const descargarModelo = (clave: string) =>
   invoke<void>("descargar_modelo", { clave });
+
+/** Mide lo que se va a borrar. No borra nada: es lo que se muestra antes. */
+export const leerResumenDesinstalacion = () =>
+  invoke<ResumenDesinstalacion>("resumen_desinstalacion");
+
+/**
+ * Borra lo que corresponda, lanza el desinstalador de Windows y cierra la app.
+ *
+ * `conservar` deja los modelos y el historial donde están. El parámetro es una
+ * sola palabra a propósito: Tauri traduce `snake_case` a `camelCase` entre Rust
+ * y JavaScript, y un nombre de una palabra no puede quedar del lado equivocado
+ * de esa conversión.
+ */
+export const desinstalar = (conservar: boolean) =>
+  invoke<void>("desinstalar", { conservar });
 
 /* ---------------------------------------------------------------- eventos */
 

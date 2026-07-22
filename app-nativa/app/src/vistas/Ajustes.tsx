@@ -18,14 +18,17 @@ import {
   borrarHistorial,
   cancelarTodas,
   descargarModelo,
+  desinstalar,
   escribirAjustes,
   leerAjustes,
   leerCatalogo,
+  leerResumenDesinstalacion,
   mensajeDeError,
   MODELO_AUTOMATICO,
   type Ajustes,
   type Catalogo,
   type ProgresoDescarga,
+  type ResumenDesinstalacion,
 } from "../api";
 import { Campo, Interruptor, Progreso, Segmentado } from "../componentes/Basicos";
 import {
@@ -35,6 +38,7 @@ import {
   nombreDePosicion,
   numero,
   pesoDeArchivo,
+  pesoEnBytes,
 } from "../formato";
 
 /** Tope del vocabulario propio, el mismo que `ajustes::MAX_VOCABULARIO`. */
@@ -58,6 +62,13 @@ export default function VistaAjustes({ alCambiarCatalogo, avisar }: Props) {
   const [descarga, setDescarga] = useState<ProgresoDescarga | null>(null);
   const [confirmandoBorrado, setConfirmandoBorrado] = useState(false);
   const [muletillaNueva, setMuletillaNueva] = useState("");
+  // La desinstalación tiene su propia confirmación de dos pasos: `resumen` es
+  // el paso 2 (existe sólo mientras el panel está abierto, con los tamaños ya
+  // medidos a la vista).
+  const [resumen, setResumen] = useState<ResumenDesinstalacion | null>(null);
+  const [midiendo, setMidiendo] = useState(false);
+  const [conservarDatos, setConservarDatos] = useState(false);
+  const [desinstalando, setDesinstalando] = useState(false);
   const montado = useRef(true);
 
   useEffect(() => {
@@ -146,6 +157,42 @@ export default function VistaAjustes({ alCambiarCatalogo, avisar }: Props) {
     borrarHistorial()
       .then(() => setConfirmandoBorrado(false))
       .catch((e) => setError(mensajeDeError(e)));
+  };
+
+  /**
+   * Paso 1 de la desinstalación: medir qué se perdería.
+   *
+   * Se mide acá y no al montar la vista porque recorre tres directorios —uno con
+   * dos gigabytes adentro—, y abrir Ajustes para subir el volumen no tiene por
+   * qué pagar eso.
+   */
+  const medirDesinstalacion = () => {
+    setMidiendo(true);
+    setError(null);
+    leerResumenDesinstalacion()
+      .then((medido) => montado.current && setResumen(medido))
+      .catch((e) => montado.current && setError(mensajeDeError(e)))
+      .finally(() => montado.current && setMidiendo(false));
+  };
+
+  /**
+   * Paso 2: ya vio qué pierde y eligió qué hacer con los datos.
+   *
+   * En el camino feliz esta promesa resuelve y medio segundo después la
+   * aplicación se cierra sola, así que `desinstalando` no se apaga: el botón
+   * queda en "Desinstalando…" hasta que la ventana desaparece. Sólo un error lo
+   * devuelve a su estado.
+   */
+  const confirmarDesinstalacion = () => {
+    setDesinstalando(true);
+    setError(null);
+    desinstalar(conservarDatos)
+      .then(() => avisar("Desinstalando MithFlow…", "info"))
+      .catch((e) => {
+        if (!montado.current) return;
+        setError(mensajeDeError(e));
+        setDesinstalando(false);
+      });
   };
 
   const enDescarga = descarga !== null && !descarga.terminado;
@@ -495,6 +542,148 @@ export default function VistaAjustes({ alCambiarCatalogo, avisar }: Props) {
             )}
           </Campo>
         </div>
+      </section>
+
+      {/* Última y aparte: es la única acción de esta pantalla que se lleva
+          puesta la aplicación entera, y no puede quedar al lado de un
+          interruptor que se toca todos los días. */}
+      <section className="seccion zona-peligro">
+        <h2>Desinstalar MithFlow</h2>
+        <p className="porque">
+          El desinstalador de Windows saca el programa y <strong>deja los datos
+          donde están</strong>: los modelos y el historial quedarían ocupando
+          disco sin que ninguna aplicación los nombre, y el historial es texto
+          plano con todo lo que dictaste. Desde acá se decide qué pasa con ellos
+          antes de sacar el programa.
+        </p>
+
+        {!resumen ? (
+          <div className="separado acciones">
+            <button
+              type="button"
+              className="boton peligro"
+              disabled={midiendo}
+              onClick={medirDesinstalacion}
+            >
+              {midiendo ? "Midiendo…" : "Desinstalar MithFlow…"}
+            </button>
+            <span className="aclaracion">
+              Todavía no borra nada: primero te digo qué se va y cuánto pesa.
+            </span>
+          </div>
+        ) : (
+          <div className="separado">
+            <ul className="que-se-borra">
+              <li>
+                <div>
+                  <div className="que">El programa</div>
+                  <div className="ruta">
+                    {resumen.programa_ruta ?? "no encontré la instalación"}
+                  </div>
+                </div>
+                <span className="peso">
+                  {resumen.programa_ruta ? pesoEnBytes(resumen.programa_bytes) : "—"}
+                </span>
+              </li>
+              <li className={conservarDatos ? "se-conserva" : undefined}>
+                <div>
+                  <div className="que">
+                    Los modelos ({numero(resumen.modelos_cantidad)}{" "}
+                    {resumen.modelos_cantidad === 1 ? "archivo" : "archivos"})
+                  </div>
+                  <div className="ruta">{resumen.modelos_ruta}</div>
+                </div>
+                <span className="peso">{pesoEnBytes(resumen.modelos_bytes)}</span>
+              </li>
+              <li className={conservarDatos ? "se-conserva" : undefined}>
+                <div>
+                  <div className="que">
+                    Los ajustes y el historial ({numero(resumen.dictados)}{" "}
+                    {resumen.dictados === 1 ? "dictado" : "dictados"})
+                  </div>
+                  <div className="ruta">{resumen.datos_ruta}</div>
+                </div>
+                <span className="peso">{pesoEnBytes(resumen.datos_bytes)}</span>
+              </li>
+            </ul>
+
+            {resumen.hay_desinstalador ? (
+              <>
+                <Campo
+                  rotulo="Qué hago con tus datos"
+                  ayuda="Conservarlos deja los modelos y el historial en el disco tal como están: si reinstalás MithFlow no tenés que volver a bajar nada."
+                >
+                  <Segmentado
+                    opciones={[
+                      { valor: "borrar", etiqueta: "Borrar todo" },
+                      {
+                        valor: "conservar",
+                        etiqueta: "Conservar modelos e historial",
+                      },
+                    ]}
+                    elegida={conservarDatos ? "conservar" : "borrar"}
+                    alElegir={(elegida) => setConservarDatos(elegida === "conservar")}
+                  />
+                </Campo>
+
+                <p className="porque separado">
+                  Al confirmar borro lo que elegiste y abro el desinstalador de
+                  Windows, que pide su propia confirmación final. Para entonces
+                  los datos ya no están: si cancelás ahí, se cancela sacar el
+                  programa, no el borrado.
+                </p>
+
+                <div className="separado acciones">
+                  <span className="aclaracion ojo">
+                    {conservarDatos
+                      ? "¿Seguro? Se saca el programa; los modelos y el historial se quedan."
+                      : `¿Seguro? Se borran ${pesoEnBytes(
+                          resumen.modelos_bytes + resumen.datos_bytes,
+                        )} de datos. No hay deshacer.`}
+                  </span>
+                  <span className="espacio" />
+                  <button
+                    type="button"
+                    className="boton plano"
+                    disabled={desinstalando}
+                    onClick={() => setResumen(null)}
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="button"
+                    className="boton peligro"
+                    disabled={desinstalando}
+                    onClick={confirmarDesinstalacion}
+                  >
+                    {desinstalando
+                      ? "Desinstalando…"
+                      : conservarDatos
+                        ? "Sí, desinstalar y conservar"
+                        : "Sí, borrar todo y desinstalar"}
+                  </button>
+                </div>
+              </>
+            ) : (
+              // Sin desinstalador no hay nada que elegir: no se ofrece la
+              // opción de borrar los datos, porque borrarlos sin poder sacar el
+              // programa es el peor de los desenlaces.
+              <div className="separado acciones">
+                <span className="aclaracion ojo">
+                  {resumen.motivo_sin_desinstalador}
+                </span>
+                <span className="espacio" />
+                <button
+                  type="button"
+                  className="boton plano"
+                  onClick={() => setResumen(null)}
+                >
+                  Cerrar
+                </button>
+              </div>
+            )}
+          </div>
+        )}
       </section>
 
       {sucio && (

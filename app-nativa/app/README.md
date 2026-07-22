@@ -70,6 +70,7 @@ npm run dev
 # http://localhost:1420/mock.html?escenario=normal
 #                                 ?escenario=primer-arranque   (asistente)
 #                                 ?escenario=grabando
+#                                 ?escenario=sin-instalar     (sin uninstall.exe al lado)
 ```
 
 Desde la consola del navegador, `mithflow.dictar("una frase")` dispara un

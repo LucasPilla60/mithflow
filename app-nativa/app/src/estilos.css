@@ -1083,6 +1083,76 @@ button.modelo:hover:not(:disabled) {
   flex: 1;
 }
 
+/* ------------------------------------------------------------ desinstalar */
+
+/* La sección destructiva del final de Ajustes. Separada del resto por un hueco
+   más grande que el del grid y con el borde teñido: es la única acción de esa
+   pantalla que se lleva puesta la aplicación entera, y no puede leerse como una
+   opción más de la lista. El color es el mismo rojo que ya significa "esto no
+   se deshace" en el botón de borrar el historial. */
+.seccion.zona-peligro {
+  margin-top: 26px;
+  border-color: rgba(240, 86, 74, 0.35);
+}
+
+.seccion.zona-peligro > h2 {
+  color: #ff9d94;
+}
+
+/* Lo que se va a borrar, con su ruta y su peso: es el dato que sostiene la
+   decisión, así que va como lista y no como párrafo. */
+.que-se-borra {
+  list-style: none;
+  margin: 0 0 4px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.que-se-borra > li {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 16px;
+  align-items: baseline;
+  padding: 8px 0;
+  border-top: 1px solid var(--borde-suave);
+}
+
+.que-se-borra > li:first-child {
+  border-top: 0;
+}
+
+.que-se-borra .que {
+  font-size: 13px;
+}
+
+.que-se-borra .ruta {
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 11px;
+  color: var(--texto-tenue);
+  overflow-wrap: anywhere;
+  margin-top: 2px;
+}
+
+.que-se-borra .peso {
+  font-variant-numeric: tabular-nums;
+  color: var(--texto);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+/* Lo que se conserva sigue en la lista —tiene que verse que existe y cuánto
+   ocupa— pero apagado y con el peso tachado: es la diferencia entre las dos
+   opciones, dibujada. */
+.que-se-borra > li.se-conserva {
+  opacity: 0.5;
+}
+
+.que-se-borra > li.se-conserva .peso {
+  text-decoration: line-through;
+}
+
 /* ------------------------------------------------------------------ misc */
 
 .cargando-vista {
