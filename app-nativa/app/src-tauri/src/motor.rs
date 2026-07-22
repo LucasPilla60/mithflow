@@ -126,7 +126,10 @@ fn dictar(
         _ => None,
     };
     al_director
-        .send(Mensaje::Transcripcion { salida, entrada })
+        .send(Mensaje::Transcripcion {
+            salida: Box::new(salida),
+            entrada,
+        })
         .map_err(|_| ())
 }
 

@@ -165,7 +165,11 @@ pub fn calcular(entradas: &[Entry], hoy: NaiveDate) -> Metricas {
             latencia_s: (suma / dictados as f64) as f32,
         })
         .collect();
-    m.por_modo.sort_by(|a, b| b.dictados.cmp(&a.dictados));
+    // De más usado a menos. `Reverse` sobre la clave en vez de dar vuelta el
+    // comparador: es el mismo orden y sigue siendo estable, pero no hay forma de
+    // equivocarse escribiendo `a` donde va `b`.
+    m.por_modo
+        .sort_by_key(|resumen| std::cmp::Reverse(resumen.dictados));
     m.por_dia = dias;
     m
 }

@@ -41,8 +41,14 @@ pub enum Mensaje {
     /// motivo por el que no se puede dictar.
     MotorListo(Result<String, String>),
     /// Resultado de un dictado, y la entrada que quedó en el historial.
+    ///
+    /// `salida` va en `Box` por la misma razón que [`Mensaje::Ajustados`]: un
+    /// enum mide lo que su variante mayor, y `DictationResult` (dos textos
+    /// completos más la entrada del historial) es varias veces más grande que
+    /// todo lo demás que pasa por esta cola. Sin el `Box`, cada `Pulso` del
+    /// atajo arrastraría ese tamaño.
     Transcripcion {
-        salida: Result<Option<DictationResult>, String>,
+        salida: Box<Result<Option<DictationResult>, String>>,
         entrada: Option<history::Entry>,
     },
     /// No se pudo enganchar el teclado.
@@ -168,7 +174,11 @@ impl Director {
                 self.avisar_error(&motivo);
                 self.cambiar(Estado::Error(motivo));
             }
-            Mensaje::Transcripcion { salida, entrada } => self.termino_de_transcribir(salida, entrada),
+            // El `Box` es sólo para que la variante no infle el tamaño del enum
+            // en la cola; acá ya no hay cola, así que se abre.
+            Mensaje::Transcripcion { salida, entrada } => {
+                self.termino_de_transcribir(*salida, entrada)
+            }
             Mensaje::Ajustados(nuevos) => self.aplicar_ajustes(nuevos),
         }
     }
