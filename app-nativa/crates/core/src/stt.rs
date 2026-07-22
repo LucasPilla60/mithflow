@@ -24,6 +24,8 @@
 //! bloqueo DESPUÉS ([`filtrar_alucinacion`]) para lo que igual se escape.
 
 use crate::config::HALLUCINATION_PHRASES;
+use std::fmt;
+use std::path::PathBuf;
 use std::sync::LazyLock;
 
 /// Umbral de la compuerta interna de whisper. Hoy coincide con el default de la
@@ -103,12 +105,60 @@ pub fn filtrar_alucinacion(texto: &str) -> String {
     texto.trim().to_string()
 }
 
+/// Por qué no se pudo abrir el modelo.
+///
+/// Son dos desenlaces que el llamador tiene que tratar distinto, y por eso son
+/// dos variantes y no un `String`:
+///
+/// - [`ErrorDeModelo::Faltante`]: **no hay archivo** en esa ruta. Es la
+///   situación normal de una instalación recién hecha —todavía no se descargó
+///   nada— y se arregla bajando el modelo. No hay nada roto.
+/// - [`ErrorDeModelo::NoCarga`]: el archivo **está** y aun así no se pudo usar
+///   (descarga cortada, GGUF corrupto, sin memoria, backends de ggml que no
+///   inicializan). Eso sí es una falla.
+///
+/// Distinguirlos por el tipo y no buscando subcadenas en el mensaje es
+/// deliberado: el texto de un error es para el usuario y cambia con cualquier
+/// retoque de redacción, así que colgar una decisión de él es una regresión
+/// silenciosa esperando a pasar.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ErrorDeModelo {
+    /// La ruta no apunta a ningún archivo.
+    Faltante(PathBuf),
+    /// El archivo existe pero el motor no pudo cargarlo. Trae el motivo ya
+    /// redactado, que es lo único accionable que hay.
+    NoCarga(String),
+}
+
+impl ErrorDeModelo {
+    /// `true` sólo cuando el `.gguf` no está en el disco.
+    ///
+    /// Es la pregunta que separa "todavía no lo descargaste" de "se rompió", y
+    /// la única que hace falta hacia afuera.
+    pub fn falta_el_archivo(&self) -> bool {
+        matches!(self, ErrorDeModelo::Faltante(_))
+    }
+}
+
+impl fmt::Display for ErrorDeModelo {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ErrorDeModelo::Faltante(ruta) => {
+                write!(f, "no encuentro el modelo en {}", ruta.display())
+            }
+            ErrorDeModelo::NoCarga(motivo) => f.write_str(motivo),
+        }
+    }
+}
+
+impl std::error::Error for ErrorDeModelo {}
+
 #[cfg(windows)]
 pub use motor::Transcriber;
 
 #[cfg(windows)]
 mod motor {
-    use super::{filtrar_alucinacion, tiene_voz};
+    use super::{filtrar_alucinacion, tiene_voz, ErrorDeModelo};
     use crate::config::{INITIAL_PROMPT, LANGUAGE};
     use std::path::Path;
     use std::sync::OnceLock;
@@ -171,21 +221,30 @@ mod motor {
     }
 
     impl Transcriber {
-        pub fn new(model_path: &Path) -> Result<Self, String> {
-            init_backends_una_vez()?;
+        /// Abre el modelo.
+        ///
+        /// El orden de los dos primeros pasos importa y no es casual: **los
+        /// backends se inicializan ANTES de mirar el disco**. Si faltan las
+        /// DLLs de ggml, eso es lo que hay que decir; devolver
+        /// [`ErrorDeModelo::Faltante`] mandaría al usuario a descargar 1,5 GB
+        /// para volver a fallar por lo mismo. Que falte el archivo sólo se
+        /// reporta cuando es de verdad lo único que falta.
+        pub fn new(model_path: &Path) -> Result<Self, ErrorDeModelo> {
+            init_backends_una_vez().map_err(ErrorDeModelo::NoCarga)?;
             if !model_path.is_file() {
-                return Err(format!(
-                    "no encuentro el modelo en {}",
-                    model_path.display()
-                ));
+                return Err(ErrorDeModelo::Faltante(model_path.to_path_buf()));
             }
             // La `Session` retiene el modelo por dentro (Arc), así que dejar
             // caer `modelo` acá no lo libera.
-            let modelo = Model::load(model_path)
-                .map_err(|e| format!("no pude cargar el modelo {}: {e}", model_path.display()))?;
+            let modelo = Model::load(model_path).map_err(|e| {
+                ErrorDeModelo::NoCarga(format!(
+                    "no pude cargar el modelo {}: {e}",
+                    model_path.display()
+                ))
+            })?;
             let session = modelo
                 .session()
-                .map_err(|e| format!("no pude crear la sesión: {e}"))?;
+                .map_err(|e| ErrorDeModelo::NoCarga(format!("no pude crear la sesión: {e}")))?;
             Ok(Self {
                 session,
                 opciones: opciones_de_dictado(INITIAL_PROMPT),
@@ -267,6 +326,50 @@ mod motor {
             assert_eq!(whisper.condition_on_prev_tokens, Some(false));
         }
 
+        /// La distinción que separa el primer arranque de una falla: una ruta
+        /// sin archivo es `Faltante` y **no** `NoCarga`.
+        ///
+        /// No necesita el modelo de 1,5 GB —sí inicializa los backends de
+        /// ggml, que es lo primero que hace `new`— porque el archivo se mira
+        /// antes de cargar nada. Prueba el orden real, no una maqueta: si un
+        /// refactor moviera la comprobación del disco después de `Model::load`,
+        /// la app le diría "se rompió" a alguien que lo único que tiene que
+        /// hacer es descargar.
+        #[test]
+        fn un_modelo_que_no_existe_es_faltante() {
+            let inexistente = std::env::temp_dir()
+                .join(format!("mithflow_sin_modelo_{}.gguf", std::process::id()));
+            assert!(!inexistente.exists(), "el archivo no tenía que existir");
+
+            // `Transcriber` no implementa `Debug`, así que el `Ok` se descarta
+            // antes de comparar en vez de con `expect_err`.
+            let Err(error) = Transcriber::new(&inexistente) else {
+                panic!("una ruta vacía no puede devolver un modelo cargado");
+            };
+            assert_eq!(error, ErrorDeModelo::Faltante(inexistente));
+        }
+
+        /// Y el reverso, que es el que no se puede aflojar: un archivo que SÍ
+        /// está pero no es un modelo válido es una falla real (`NoCarga`), no
+        /// "todavía no lo descargaste".
+        #[test]
+        fn un_modelo_corrupto_no_es_faltante() {
+            let corrupto = std::env::temp_dir()
+                .join(format!("mithflow_modelo_roto_{}.gguf", std::process::id()));
+            std::fs::write(&corrupto, b"GGUF pero no: esto es basura").expect("no pude escribirlo");
+
+            let resultado = Transcriber::new(&corrupto);
+            std::fs::remove_file(&corrupto).ok();
+            let Err(error) = resultado else {
+                panic!("un archivo de basura no puede cargar como modelo");
+            };
+
+            assert!(
+                !error.falta_el_archivo(),
+                "un archivo presente que no carga es una falla, no un modelo por descargar: {error}"
+            );
+        }
+
         /// Y sin vocabulario propio, exactamente el prompt de fábrica.
         #[test]
         fn sin_vocabulario_propio_se_usa_el_de_fabrica() {
@@ -282,6 +385,30 @@ mod motor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Los dos desenlaces se distinguen por el TIPO. Este test existe para que
+    /// nadie vuelva a decidirlo buscando subcadenas en el mensaje.
+    #[test]
+    fn el_error_de_modelo_separa_lo_que_falta_de_lo_que_no_carga() {
+        let falta = ErrorDeModelo::Faltante(PathBuf::from("D:\\no\\existe\\modelo.gguf"));
+        let roto = ErrorDeModelo::NoCarga("no pude crear la sesión: sin memoria".into());
+
+        assert!(falta.falta_el_archivo());
+        assert!(!roto.falta_el_archivo(), "un modelo que no carga NO es uno que falta");
+        assert_ne!(falta, roto);
+    }
+
+    /// Los dos se muestran tal cual al usuario, así que los dos tienen que
+    /// decir algo.
+    #[test]
+    fn el_error_de_modelo_se_lee_en_castellano() {
+        let falta = ErrorDeModelo::Faltante(PathBuf::from("D:\\modelos\\turbo.gguf"));
+        assert!(falta.to_string().contains("turbo.gguf"), "{falta}");
+        assert!(falta.to_string().contains("no encuentro"), "{falta}");
+
+        let roto = ErrorDeModelo::NoCarga("el archivo está cortado".into());
+        assert_eq!(roto.to_string(), "el archivo está cortado");
+    }
 
     #[test]
     fn filtra_alucinaciones_conocidas() {

@@ -328,7 +328,10 @@ mod medicion {
         let ram_total_gb = ram_total_gb();
         let gpu = describir_gpu();
 
-        let mut transcriber = Transcriber::new(modelo_de_prueba)?;
+        // Acá no hace falta distinguir por qué no abrió: perfilar SIEMPRE se
+        // llama con un modelo que el asistente acaba de descargar, así que
+        // cualquier fallo es igual de excepcional y el texto alcanza.
+        let mut transcriber = Transcriber::new(modelo_de_prueba).map_err(|e| e.to_string())?;
         let backend = transcriber.backend();
         let factor_tiempo_real = medir_factor_tiempo_real(&mut transcriber)?;
 

@@ -15,7 +15,7 @@
 
 use crate::ajustes::Ajustes;
 use crate::bandeja;
-use crate::estado::{Estado, EstadoCompartido, EstadoDto};
+use crate::estado::{Estado, EstadoCompartido, EstadoDto, FalloDelMotor};
 use crate::motor::AlMotor;
 use crate::sonidos::{Sonidos, Tono};
 use crate::{atajo, eventos};
@@ -38,8 +38,9 @@ pub enum Mensaje {
     Pausa(bool),
     AlternarPausa,
     /// El motor terminó de cargar y calentar: `Ok` con un resumen, `Err` con el
-    /// motivo por el que no se puede dictar.
-    MotorListo(Result<String, String>),
+    /// motivo por el que no se puede dictar **y de qué clase es** — que todavía
+    /// no haya modelo descargado no es lo mismo que uno que no carga.
+    MotorListo(Result<String, FalloDelMotor>),
     /// Resultado de un dictado, y la entrada que quedó en el historial.
     ///
     /// `salida` va en `Box` por la misma razón que [`Mensaje::Ajustados`]: un
@@ -166,10 +167,7 @@ impl Director {
                     self.cambiar(Estado::Listo);
                 }
             }
-            Mensaje::MotorListo(Err(motivo)) => {
-                self.avisar_error(&motivo);
-                self.cambiar(Estado::Error(motivo));
-            }
+            Mensaje::MotorListo(Err(fallo)) => self.motor_no_arranca(fallo),
             Mensaje::AtajoRoto(motivo) => {
                 self.avisar_error(&motivo);
                 self.cambiar(Estado::Error(motivo));
@@ -183,21 +181,42 @@ impl Director {
         }
     }
 
+    /// El motor no va a poder dictar. Las dos ramas se comportan igual en lo
+    /// funcional —no se dicta— y se cuentan distinto a propósito.
+    ///
+    /// `SinModelo` **no pisa un problema real que ya esté publicado**, por la
+    /// misma razón que `MotorListo(Ok)` no pisa un error: si el atajo ya se
+    /// rompió, bajar el tono a "falta el modelo" escondería la falla.
+    fn motor_no_arranca(&mut self, fallo: FalloDelMotor) {
+        match fallo {
+            FalloDelMotor::SinModelo(_) => {
+                eprintln!("{}", fallo.motivo());
+                // Sin tono de error y con nivel "info": nadie pidió nada
+                // todavía, la app se acaba de abrir y esto es lo que le toca
+                // hacer al usuario, no algo que se rompió.
+                eventos::aviso(&self.app, fallo.motivo(), "info");
+                if !self.estado.es_falla() {
+                    self.cambiar(fallo.estado());
+                }
+            }
+            FalloDelMotor::Roto(_) => {
+                self.avisar_error(fallo.motivo());
+                self.cambiar(fallo.estado());
+            }
+        }
+    }
+
     /// El atajo. Cada estado tiene una respuesta y **ninguno se queda callado**:
     /// sin realimentación, "no pasó nada" y "no estaba listo" se ven igual.
     fn pulso(&mut self) {
         match &self.estado {
             Estado::Listo => self.empezar_a_grabar(),
             Estado::Grabando => self.dejar_de_grabar(),
-            Estado::Cargando => {
-                self.avisar_error("Todavía estoy preparando el motor; dame unos segundos.");
-            }
-            Estado::Transcribiendo => {
-                self.avisar_error("Estoy transcribiendo el dictado anterior.");
-            }
-            Estado::Error(motivo) => {
-                let motivo = motivo.clone();
-                self.avisar_error(&motivo);
+            // Los demás no dictan; lo único que cambia es qué se contesta.
+            otro => {
+                if let Some(motivo) = respuesta_al_atajo(otro) {
+                    self.avisar_error(&motivo);
+                }
             }
         }
     }
@@ -360,6 +379,26 @@ impl Director {
     }
 }
 
+/// Qué contestarle al atajo cuando no se puede dictar.
+///
+/// `None` en los dos estados que SÍ dictan: ésos no se contestan, se atienden
+/// moviéndose ([`Director::pulso`]). Es una función suelta y no un método
+/// porque no toca nada del director, y así se puede probar sin un `AppHandle`.
+fn respuesta_al_atajo(estado: &Estado) -> Option<String> {
+    match estado {
+        Estado::Listo | Estado::Grabando => None,
+        Estado::Cargando => Some("Todavía estoy preparando el motor; dame unos segundos.".into()),
+        Estado::Transcribiendo => Some("Estoy transcribiendo el dictado anterior.".into()),
+        // Falta un paso, y se nombra el paso. El motivo guardado dice lo mismo
+        // pero mirando hacia atrás ("no hay ningún modelo descargado"); al que
+        // acaba de apretar la tecla hay que decirle qué hacer.
+        Estado::SinModelo(_) => {
+            Some("Todavía no descargaste el modelo. Abrí Ajustes y bajá uno para dictar.".into())
+        }
+        Estado::Error(motivo) => Some(motivo.clone()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -383,5 +422,52 @@ mod tests {
         let al_director = AlDirector::nuevo(tx);
         drop(rx);
         al_director.enviar(Mensaje::AlternarPausa);
+    }
+
+    /// Ningún estado que no dicta se queda callado: apretar el atajo siempre
+    /// contesta algo. Es la garantía que documenta `pulso`.
+    #[test]
+    fn el_atajo_contesta_en_todos_los_estados_que_no_dictan() {
+        assert_eq!(respuesta_al_atajo(&Estado::Listo), None);
+        assert_eq!(respuesta_al_atajo(&Estado::Grabando), None);
+        for estado in [
+            Estado::Cargando,
+            Estado::Transcribiendo,
+            Estado::SinModelo("no hay modelo".into()),
+            Estado::Error("el atajo no se enganchó".into()),
+        ] {
+            let respuesta = respuesta_al_atajo(&estado)
+                .unwrap_or_else(|| panic!("{estado:?} se quedó sin respuesta"));
+            assert!(!respuesta.is_empty(), "{estado:?} contestó vacío");
+        }
+    }
+
+    /// `SinModelo` dicta tan poco como `Error`, pero lo dice distinto: nombra
+    /// el paso que falta en vez del tono de fallo.
+    #[test]
+    fn sin_modelo_contesta_lo_que_falta_y_no_un_error() {
+        let respuesta = respuesta_al_atajo(&Estado::SinModelo(
+            "todavía no hay ningún modelo descargado".into(),
+        ))
+        .expect("sin modelo no se puede dictar, así que hay respuesta");
+
+        assert!(
+            respuesta.contains("descargaste") && respuesta.contains("Ajustes"),
+            "tiene que decir qué hacer: {respuesta}"
+        );
+        assert!(
+            !respuesta.to_lowercase().contains("error"),
+            "el primer arranque no es un error: {respuesta}"
+        );
+    }
+
+    /// Y un error real contesta su propio motivo, tal cual: nada de suavizarlo.
+    #[test]
+    fn un_error_real_contesta_su_motivo() {
+        let motivo = "No pude enganchar el atajo: otra app tiene la tecla.";
+        assert_eq!(
+            respuesta_al_atajo(&Estado::Error(motivo.into())).as_deref(),
+            Some(motivo)
+        );
     }
 }

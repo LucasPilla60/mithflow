@@ -16,11 +16,17 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 /* ------------------------------------------------------------------ tipos */
 
+/**
+ * Las claves de `estado::Estado::clave()`. `"sin-modelo"` es su propia clave y
+ * no un `"error"` con otro texto a propósito: es lo que decide el color, y
+ * pintar de rojo un primer arranque que va bien es mentirle al usuario.
+ */
 export type ClaveEstado =
   | "cargando"
   | "listo"
   | "grabando"
   | "transcribiendo"
+  | "sin-modelo"
   | "error";
 
 /** Espejo de `estado::EstadoDto`. */

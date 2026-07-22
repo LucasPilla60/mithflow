@@ -7,6 +7,7 @@
 //! de la que el usuario usa todos los días.
 
 use crate::ajustes::{modelo_de_clave, Ajustes};
+use crate::estado::FalloDelMotor;
 use mithflow_core::models::{self, Modelo};
 use std::path::PathBuf;
 use tauri::{AppHandle, Manager, Runtime};
@@ -45,7 +46,12 @@ pub fn historial<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
 /// El paso 3 no es un capricho: si el usuario eligió el `F16` pero todavía sólo
 /// bajó el `Q4_K_M`, dictar con el chico es mucho mejor que no dictar. Devuelve
 /// también si hubo que sustituir, para poder avisarlo.
-pub fn modelo(ajustes: &Ajustes) -> Result<(PathBuf, Option<String>), String> {
+///
+/// El error es un [`FalloDelMotor`] y no un `String` porque acá se decide algo
+/// que después se ve: **no haber descargado nada todavía no es una falla**
+/// (`SinModelo`), pero no poder resolver el directorio de modelos o tener la
+/// variable de entorno apuntando a cualquier lado sí lo es (`Roto`).
+pub fn modelo(ajustes: &Ajustes) -> Result<(PathBuf, Option<String>), FalloDelMotor> {
     if let Some(desde_entorno) = desde_variable(std::env::var_os(VAR_MODELO).map(PathBuf::from)) {
         return desde_entorno;
     }
@@ -53,20 +59,25 @@ pub fn modelo(ajustes: &Ajustes) -> Result<(PathBuf, Option<String>), String> {
     let elegido = modelo_de_clave(&ajustes.modelo);
     if let Some(m) = elegido {
         if models::esta_descargado(m) {
-            return Ok((models::ruta(m)?, None));
+            return Ok((models::ruta(m).map_err(FalloDelMotor::Roto)?, None));
         }
     }
 
     let Some(disponible) = Modelo::TODOS.into_iter().find(|m| models::esta_descargado(*m)) else {
-        return Err(
-            "no hay ningún modelo descargado. Abrí Ajustes y descargá uno para poder dictar."
+        // El primer arranque entra por acá: no hay nada descargado porque la
+        // app se acaba de instalar. Se cuenta como lo que es.
+        return Err(FalloDelMotor::SinModelo(
+            "todavía no hay ningún modelo descargado. Bajá uno desde Ajustes para poder dictar."
                 .to_string(),
-        );
+        ));
     };
     let aviso = elegido.map(|m| {
         format!("{m} todavía no está descargado; uso {disponible} mientras tanto.")
     });
-    Ok((models::ruta(disponible)?, aviso))
+    Ok((
+        models::ruta(disponible).map_err(FalloDelMotor::Roto)?,
+        aviso,
+    ))
 }
 
 /// La rama de [`VAR_MODELO`], separada de la lectura del entorno para poder
@@ -75,16 +86,23 @@ pub fn modelo(ajustes: &Ajustes) -> Result<(PathBuf, Option<String>), String> {
 /// `None` significa "la variable no está, seguí con el catálogo". Si está pero
 /// apunta a cualquier cosa, es un ERROR y no un aviso: quien la fijó lo hizo a
 /// propósito, y caerse en silencio a otro modelo escondería el problema.
-fn desde_variable(valor: Option<PathBuf>) -> Option<Result<(PathBuf, Option<String>), String>> {
+///
+/// Es `Roto` y no `SinModelo` aunque el archivo tampoco esté: la diferencia no
+/// es si hay un `.gguf` en esa ruta sino qué tiene que hacer el usuario.
+/// Descargar un modelo no arregla una variable de entorno mal escrita, así que
+/// mandarlo a Ajustes a bajar 1,5 GB sería peor que decirle la verdad.
+fn desde_variable(
+    valor: Option<PathBuf>,
+) -> Option<Result<(PathBuf, Option<String>), FalloDelMotor>> {
     let ruta = valor?;
     if ruta.is_file() {
         let aviso = format!("modelo tomado de {VAR_MODELO}: {}", ruta.display());
         return Some(Ok((ruta, Some(aviso))));
     }
-    Some(Err(format!(
+    Some(Err(FalloDelMotor::Roto(format!(
         "{VAR_MODELO} apunta a {}, que no es un archivo",
         ruta.display()
-    )))
+    ))))
 }
 
 #[cfg(test)]
@@ -99,13 +117,22 @@ mod tests {
     }
 
     /// Una variable mal puesta tiene que dar un error claro, no caerse a otro
-    /// modelo por su cuenta: si alguien la fijó, es a propósito.
+    /// modelo por su cuenta: si alguien la fijó, es a propósito. Y es una falla
+    /// de verdad, no "todavía no descargaste": bajar un modelo no la arregla.
     #[test]
     fn la_variable_apuntando_a_la_nada_es_un_error() {
         let salida = desde_variable(Some(PathBuf::from("D:\\no\\existe\\modelo.gguf")))
             .expect("con la variable puesta, la rama decide");
         let error = salida.expect_err("una ruta inexistente no puede pasar");
-        assert!(error.contains("no es un archivo"), "mensaje: {error}");
+        assert!(
+            error.motivo().contains("no es un archivo"),
+            "mensaje: {}",
+            error.motivo()
+        );
+        assert!(
+            error.estado().es_falla(),
+            "una variable mal escrita es una falla, no un modelo por descargar"
+        );
     }
 
     #[test]

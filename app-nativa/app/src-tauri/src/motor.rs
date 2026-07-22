@@ -22,6 +22,8 @@
 
 use crate::ajustes::Ajustes;
 use crate::director::Mensaje;
+use crate::estado::FalloDelMotor;
+use mithflow_core::stt::ErrorDeModelo;
 use mithflow_core::{dictate_con, hardware, stt::Transcriber, Preferencias};
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Sender};
@@ -72,10 +74,10 @@ fn trabajar(
     let mut transcriber = match Transcriber::new(&modelo) {
         Ok(t) => t,
         Err(e) => {
-            // Fin del hilo. El director pasa a `Error` y la app sigue viva: el
-            // usuario todavía puede abrir Ajustes y descargar un modelo, que es
-            // justo la forma de arreglar esto.
-            let _ = al_director.send(Mensaje::MotorListo(Err(e)));
+            // Fin del hilo. El director publica el estado que corresponda y la
+            // app sigue viva: el usuario todavía puede abrir Ajustes y
+            // descargar un modelo, que es justo la forma de arreglar esto.
+            let _ = al_director.send(Mensaje::MotorListo(Err(clasificar(e))));
             return;
         }
     };
@@ -105,6 +107,25 @@ fn trabajar(
                 }
             }
         }
+    }
+}
+
+/// Traduce el fallo del núcleo al que entiende el director.
+///
+/// Es el punto exacto donde se decide si el usuario ve un aviso o un error, y
+/// **la decisión no mira el texto del mensaje**: la toma
+/// [`ErrorDeModelo::falta_el_archivo`], que sabe si el `.gguf` estaba en el
+/// disco porque es quien lo miró. Un archivo ausente es el primer arranque —o
+/// alguien que borró el modelo— y se arregla descargando; un archivo presente
+/// que no carga (GGUF cortado, sin memoria, backends de ggml rotos) es una
+/// falla y tiene que seguir viéndose como tal.
+fn clasificar(error: ErrorDeModelo) -> FalloDelMotor {
+    if error.falta_el_archivo() {
+        FalloDelMotor::SinModelo(format!(
+            "{error}. Bajá un modelo desde Ajustes para poder dictar."
+        ))
+    } else {
+        FalloDelMotor::Roto(error.to_string())
     }
 }
 
@@ -148,5 +169,49 @@ fn calentar(transcriber: &mut Transcriber) -> String {
     match transcriber.transcribe(&hardware::audio_de_referencia()) {
         Ok(_) => format!("calentado en {:.1} s", t0.elapsed().as_secs_f32()),
         Err(e) => format!("sin calentar: {e}; el primer dictado va a tardar más"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    /// Un modelo que todavía no está en el disco NO es una falla: es el primer
+    /// arranque. Este test y el siguiente son los dos lados de la misma
+    /// regla, y el par tiene que moverse junto.
+    #[test]
+    fn un_modelo_que_falta_lleva_al_estado_sin_modelo() {
+        let fallo = clasificar(ErrorDeModelo::Faltante(
+            Path::new("D:\\modelos\\turbo.gguf").to_path_buf(),
+        ));
+
+        assert!(matches!(fallo, FalloDelMotor::SinModelo(_)));
+        let estado = fallo.estado();
+        assert_eq!(estado.clave(), "sin-modelo");
+        assert!(!estado.es_falla(), "faltar el archivo no es una falla");
+        assert!(
+            estado.detalle().is_some_and(|d| d.contains("Ajustes")),
+            "el motivo tiene que decir dónde se arregla: {estado:?}"
+        );
+    }
+
+    /// Y el reverso, que es la mitad que no se puede aflojar: un modelo que
+    /// está pero no carga sigue siendo `Error` en rojo. Bajarlo de tono
+    /// escondería un problema real.
+    #[test]
+    fn un_modelo_que_no_carga_sigue_siendo_error() {
+        let fallo = clasificar(ErrorDeModelo::NoCarga(
+            "no pude cargar el modelo D:\\modelos\\turbo.gguf: header inválido".into(),
+        ));
+
+        assert!(matches!(fallo, FalloDelMotor::Roto(_)));
+        let estado = fallo.estado();
+        assert_eq!(estado.clave(), "error");
+        assert!(estado.es_falla());
+        assert!(
+            !estado.detalle().unwrap_or_default().contains("Bajá"),
+            "no se le pide descargar a quien ya tiene el archivo: {estado:?}"
+        );
     }
 }

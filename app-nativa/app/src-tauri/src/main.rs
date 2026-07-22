@@ -37,7 +37,7 @@ mod sonidos;
 mod ventana;
 
 use crate::director::{AlDirector, Mensaje};
-use crate::estado::EstadoCompartido;
+use crate::estado::{EstadoCompartido, FalloDelMotor};
 use crate::sonidos::Sonidos;
 use std::sync::mpsc;
 use std::sync::Arc;
@@ -146,10 +146,12 @@ fn preparar(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
 
 /// Resuelve el modelo y arranca el motor.
 ///
-/// Si no hay ningún modelo descargado se devuelve un canal muerto y se le avisa
-/// al director, que lo convierte en estado `Error` con el motivo. **No se sale
-/// de la aplicación**: descargar el modelo se hace desde Ajustes, o sea desde
-/// esta misma app corriendo.
+/// Si no se puede se devuelve un canal muerto y se le avisa al director, que
+/// sabe convertir cada clase de fallo en el estado que le toca: `SinModelo` si
+/// lo único que pasa es que todavía no se descargó nada —el primer arranque—,
+/// `Error` si algo se rompió de verdad. **No se sale de la aplicación**:
+/// descargar el modelo se hace desde Ajustes, o sea desde esta misma app
+/// corriendo.
 fn arrancar_motor(
     handle: &tauri::AppHandle,
     cfg: &ajustes::Ajustes,
@@ -157,7 +159,9 @@ fn arrancar_motor(
 ) -> mpsc::Sender<motor::AlMotor> {
     let historial = match rutas::historial(handle) {
         Ok(h) => h,
-        Err(e) => return motor_ausente(al_director, e),
+        // Sin dónde escribir el historial no hay dictado, y no es algo que se
+        // arregle descargando un modelo: es una falla.
+        Err(e) => return motor_ausente(al_director, FalloDelMotor::Roto(e)),
     };
     println!("historial: {}", historial.display());
 
@@ -170,7 +174,7 @@ fn arrancar_motor(
             println!("cargando el modelo {}…", ruta.display());
             motor::lanzar(al_director.clone(), ruta, historial, cfg.clone())
         }
-        Err(e) => motor_ausente(al_director, e),
+        Err(fallo) => motor_ausente(al_director, fallo),
     }
 }
 
@@ -178,10 +182,10 @@ fn arrancar_motor(
 /// exactamente lo que el director sabe informar.
 fn motor_ausente(
     al_director: &mpsc::Sender<Mensaje>,
-    motivo: String,
+    fallo: FalloDelMotor,
 ) -> mpsc::Sender<motor::AlMotor> {
-    eprintln!("el motor no arranca: {motivo}");
-    let _ = al_director.send(Mensaje::MotorListo(Err(motivo)));
+    eprintln!("el motor no arranca: {}", fallo.motivo());
+    let _ = al_director.send(Mensaje::MotorListo(Err(fallo)));
     let (huerfano, _) = mpsc::channel();
     huerfano
 }

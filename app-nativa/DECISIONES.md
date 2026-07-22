@@ -759,3 +759,103 @@ nada.
   empaquetado.
 - **`allow_downgrades` queda en `true`** (el default). Con una sola versión
   publicada no cambia nada, pero conviene revisarlo cuando haya una segunda.
+
+## Arreglo — "Error" en el primer arranque (21/7/2026)
+
+### El síntoma
+
+Instalación nueva. El asistente hace lo correcto —baja el modelo de medición,
+con su barra de progreso— y arriba, en la cabecera, una pastilla **roja que dice
+"Error"**. No había ningún error: el motor no puede cargar un modelo que todavía
+no se descargó, y eso se reportaba como `Estado::Error`. Correcto por dentro,
+mentira por fuera, y en el primer minuto de uso.
+
+### El arreglo: un estado propio, no un mensaje más suave
+
+Se agregó `Estado::SinModelo(String)`, con clave `"sin-modelo"` y etiqueta
+"Falta el modelo". **Funcionalmente se comporta como `Error`** (no se dicta, y
+apretar el atajo contesta), pero se cuenta distinto en los cuatro lugares donde
+el estado se ve: clave, etiqueta, color de la bandeja (ámbar `#d9a441`, nunca el
+rojo del error) y respuesta al atajo ("Todavía no descargaste el modelo. Abrí
+Ajustes y bajá uno para dictar." en vez del motivo con tono de fallo).
+
+`Error` queda para lo que sí se rompió: el modelo está pero no carga, el atajo no
+se enganchó, no hay dónde escribir el historial. **La regla que ordena todo el
+cambio es que no se convierten errores reales en avisos** — el objetivo era dejar
+de mentir en el caso bueno, no esconder los malos.
+
+### Cómo se distingue "no hay archivo" de "no carga" — por tipo, no por texto
+
+`Transcriber::new` devolvía `Result<Self, String>`, y ahí "no encuentro el modelo
+en X" y "no pude cargar el modelo X: header inválido" eran la misma cosa: una
+cadena. Elegir el estado a partir de ella habría significado buscar subcadenas en
+un texto escrito para el usuario, o sea una regresión silenciosa esperando a la
+próxima corrección de redacción.
+
+Ahora hay dos tipos, uno por escalón:
+
+- **`mithflow_core::stt::ErrorDeModelo`** — `Faltante(PathBuf)` cuando la ruta no
+  apunta a ningún archivo (`stt.rs` ya validaba la existencia por separado, sólo
+  había que no perder esa información), `NoCarga(String)` para todo lo demás.
+  `falta_el_archivo()` es la única pregunta que se hace hacia afuera.
+- **`estado::FalloDelMotor`** — `SinModelo` / `Roto`, con `estado()` como único
+  lugar donde se decide qué estado le toca a cada uno. `rutas::modelo` y
+  `motor::clasificar` lo producen; `director::motor_no_arranca` lo consume.
+
+**El orden dentro de `Transcriber::new` importa y quedó documentado en el
+código**: los backends de ggml se inicializan ANTES de mirar el disco. Si faltan
+las DLLs, eso es lo que hay que decir; devolver `Faltante` mandaría al usuario a
+descargar 1,5 GB para volver a fallar por lo mismo.
+
+`MITHFLOW_MODELO` apuntando a una ruta que no existe sigue siendo `Roto` y no
+`SinModelo`, aunque tampoco haya archivo: la diferencia no es si hay un `.gguf`
+sino qué tiene que hacer el usuario, y descargar un modelo no arregla una
+variable de entorno mal escrita.
+
+### Dos guardas que impiden esconder una falla
+
+1. `SinModelo` **no pisa** un `Error` ya publicado (`if !self.estado.es_falla()`
+   en `motor_no_arranca`). Si el atajo no se enganchó y encima no hay modelo, lo
+   que se ve es el problema real. Es la contraparte de la guarda que ya existía
+   para que `MotorListo(Ok)` no pisara un error con un "Listo" falso.
+2. `es_falla()` es `true` **sólo** para `Error`, con un test que recorre todos los
+   estados: si mañana alguien marca otro como falla, se rompe ahí.
+
+### Lo que el usuario ve ahora
+
+| Situación | Antes | Ahora |
+|---|---|---|
+| Primer arranque, asistente bajando el modelo | pastilla roja "Error" | sin pastilla (el asistente ya lo dice); bandeja ámbar "Falta el modelo" |
+| Sin modelo, con el asistente cerrado | roja "Error" | ámbar "Falta el modelo" + el motivo y qué hacer |
+| Modelo presente que no carga (corrupto, sin memoria, backend roto) | roja "Error" | **igual**: roja "Error" |
+| Atajo que no se pudo enganchar / micrófono que falla | roja "Error" | **igual**: roja "Error" |
+
+Con el asistente en pantalla se esconden la pastilla y el botón de pausa, pero
+**sólo** en `sin-modelo`: mostrar "Falta el modelo" arriba mientras la pantalla
+entera dice "Bajando el modelo" es redundante, y pausar un dictado que todavía no
+puede existir no significa nada. Un error de verdad se sigue mostrando aunque el
+asistente esté abierto.
+
+### Al arrancar no suena el tono de error
+
+`SinModelo` publica el aviso con nivel `"info"` y sin tono; `Error` mantiene tono
+y nivel `"error"`. Nadie pidió nada todavía —la app se acaba de abrir— así que un
+beep de error en el primer arranque es exactamente el ruido que este cambio vino
+a sacar. Cuando el usuario SÍ pide algo (aprieta el atajo), `SinModelo` contesta
+con la misma realimentación que cualquier otro estado que no dicta: sin eso, "no
+pasó nada" y "todavía no se puede" se ven igual.
+
+### El backend simulado también mentía
+
+`src/desarrollo/backendSimulado.ts`, escenario `primer-arranque`, publicaba
+`estado: "error"` a mano. Quedó actualizado: si el simulado miente, el próximo
+que mire la pantalla de bienvenida en el navegador ve un bug que ya no existe.
+
+### Verificación
+
+- `cargo test --workspace`: 88 núcleo (eran 84) + 59 app (eran 49). Los cuatro
+  del núcleo incluyen los dos que valen: `Transcriber::new` sobre una ruta vacía
+  da `Faltante`, sobre un archivo de basura da `NoCarga`. Cargan los backends de
+  ggml de verdad, así que prueban el orden real y no una maqueta.
+- `cargo clippy --workspace --all-targets -- -D warnings`: limpio.
+- `npm run build`: sin errores de TypeScript.

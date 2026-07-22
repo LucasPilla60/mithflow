@@ -91,8 +91,17 @@ apuntar a un `.gguf` concreto:
 $env:MITHFLOW_MODELO = "D:\MithFlow\app-nativa\models\whisper-large-v3-turbo-Q4_K_M.gguf"
 ```
 
-Sin ningún modelo descargado la app **igual arranca**, en estado `Error` y con el
-motivo a la vista: descargarlo se hace desde Ajustes, o sea desde esta misma app.
+Sin ningún modelo descargado la app **igual arranca**, en estado `SinModelo`
+("Falta el modelo", en ámbar) y con el motivo a la vista: descargarlo se hace
+desde Ajustes, o sea desde esta misma app.
+
+Ese estado **no es `Error`** a propósito. En el primer arranque no hay nada roto
+—el asistente está bajando el modelo, con su barra de progreso— y una pastilla
+roja ahí arriba diría lo contrario. `Error` queda para lo que sí es una falla: el
+modelo está en el disco pero no carga, el atajo no se pudo enganchar, no hay
+dónde escribir el historial. La distinción se decide por tipo
+(`stt::ErrorDeModelo` en el núcleo, `estado::FalloDelMotor` en la app), nunca
+comparando el texto del mensaje.
 
 ## Convivencia con la versión Python
 

@@ -128,6 +128,10 @@ fn registrar(resultado: tauri::Result<()>, que: &str) {
 
 /// El texto que se ve al pasar el mouse. Incluye la tecla porque es
 /// configurable: sin eso, alguien que cambió el atajo no tiene dónde mirarlo.
+///
+/// Los estados con detalle —`Error` y `SinModelo`— lo muestran entero, y la
+/// etiqueta de cada uno es lo que los separa: "Falta el modelo: …" no se lee
+/// como "Error: …" aunque los dos impidan dictar.
 fn tooltip(dto: &EstadoDto) -> String {
     if let Some(detalle) = &dto.detalle {
         return format!("MithFlow — {}: {detalle}", dto.etiqueta);
@@ -142,11 +146,17 @@ fn tooltip(dto: &EstadoDto) -> String {
     }
 }
 
-/// Color RGB de cada estado. La pausa gana sobre todo menos el error: si algo
-/// se rompió, eso es lo que hay que ver.
+/// Color RGB de cada estado. La pausa gana sobre todo menos los dos estados que
+/// el usuario tiene que resolver: pausar no arregla ninguno de los dos, así que
+/// taparlos con el gris de la pausa sería esconderlos.
+///
+/// **El rojo de error es sólo del error.** Que falte el modelo se pinta de
+/// ámbar —el color de "te falta un paso"— porque en el primer arranque no hay
+/// nada roto: la app está bajando el modelo y hace justo lo que corresponde.
 fn color(dto: &EstadoDto) -> [u8; 3] {
     match dto.estado {
-        "error" => [0xb3, 0x14, 0x12], // rojo oscuro
+        "error" => [0xb3, 0x14, 0x12],          // rojo oscuro
+        "sin-modelo" => [0xd9, 0xa4, 0x41],     // ámbar apagado, de aviso
         _ if dto.pausado => [0x5f, 0x63, 0x68], // gris azulado
         "cargando" => [0x9a, 0xa0, 0xa6],       // gris
         "listo" => [0x34, 0xa8, 0x53],          // verde
@@ -195,6 +205,7 @@ mod tests {
             color(&dto(Estado::Listo, false)),
             color(&dto(Estado::Grabando, false)),
             color(&dto(Estado::Transcribiendo, false)),
+            color(&dto(Estado::SinModelo("x".into()), false)),
             color(&dto(Estado::Error("x".into()), false)),
         ];
         for (i, a) in colores.iter().enumerate() {
@@ -204,12 +215,33 @@ mod tests {
         }
     }
 
+    /// El arreglo, en una línea: el ícono de "falta el modelo" no puede ser el
+    /// rojo del error, ni parecerse. Con el asistente bajando el modelo, ese
+    /// rojo en la barra de tareas es la mentira que este cambio vino a sacar.
     #[test]
-    fn el_error_se_ve_aunque_este_pausado() {
-        assert_eq!(
-            color(&dto(Estado::Error("x".into()), true)),
-            color(&dto(Estado::Error("x".into()), false))
+    fn falta_el_modelo_no_se_pinta_del_rojo_del_error() {
+        let falta = color(&dto(Estado::SinModelo("todavía no hay modelo".into()), false));
+        let error = color(&dto(Estado::Error("el modelo no carga".into()), false));
+        assert_ne!(falta, error);
+
+        // Y no es "un rojo distinto": el rojo del error es el canal dominante
+        // por lejos, y el de aviso no puede serlo.
+        let [r, g, b] = falta;
+        assert!(
+            u16::from(g) + u16::from(b) > u16::from(r),
+            "el color de aviso no puede leerse como rojo: {falta:02x?}"
         );
+    }
+
+    #[test]
+    fn lo_que_hay_que_resolver_se_ve_aunque_este_pausado() {
+        for estado in [Estado::Error("x".into()), Estado::SinModelo("x".into())] {
+            assert_eq!(
+                color(&dto(estado.clone(), true)),
+                color(&dto(estado.clone(), false)),
+                "{estado:?} no puede quedar tapado por el gris de la pausa"
+            );
+        }
         assert_ne!(
             color(&dto(Estado::Listo, true)),
             color(&dto(Estado::Listo, false)),
@@ -231,8 +263,25 @@ mod tests {
 
     #[test]
     fn el_tooltip_dice_el_motivo_cuando_hay_error() {
-        let t = tooltip(&dto(Estado::Error("no hay modelo".into()), false));
-        assert!(t.contains("no hay modelo"), "tooltip: {t}");
+        let t = tooltip(&dto(Estado::Error("el modelo no carga".into()), false));
+        assert!(t.contains("el modelo no carga"), "tooltip: {t}");
+        assert!(t.contains("Error"), "tooltip: {t}");
+    }
+
+    /// El tooltip del primer arranque cuenta el motivo igual, pero no se lee
+    /// como una falla: lo que cambia es la etiqueta que lo encabeza.
+    #[test]
+    fn el_tooltip_de_falta_el_modelo_no_dice_error() {
+        let t = tooltip(&dto(
+            Estado::SinModelo("todavía no hay ningún modelo descargado".into()),
+            false,
+        ));
+        assert!(t.contains("Falta el modelo"), "tooltip: {t}");
+        assert!(t.contains("todavía no hay ningún modelo"), "tooltip: {t}");
+        assert!(
+            !t.to_lowercase().contains("error"),
+            "el tooltip del primer arranque no puede decir error: {t}"
+        );
     }
 
     #[test]

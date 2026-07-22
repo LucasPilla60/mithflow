@@ -412,8 +412,9 @@ pub fn descargar_modelo(app: AppHandle, clave: String) -> Result<(), String> {
                 Ok(_) => {
                     // Cerrar el lazo: el motor carga el modelo UNA vez, al
                     // arrancar. Sin este aviso, alguien que abrió la app sin
-                    // ningún modelo, la vio en Error y bajó uno desde Ajustes
-                    // se queda mirando el mismo Error sin saber que ya está.
+                    // ningún modelo, la vio en "Falta el modelo" y bajó uno
+                    // desde Ajustes se queda mirando la misma pastilla sin
+                    // saber que ya está.
                     eventos::aviso(
                         &app,
                         "Modelo descargado. Reiniciá MithFlow para empezar a usarlo.",

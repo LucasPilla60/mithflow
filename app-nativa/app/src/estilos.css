@@ -118,6 +118,13 @@ button:disabled {
   background: var(--rojo);
 }
 
+/* Falta el modelo: ámbar de aviso, nunca el rojo del error. En el primer
+   arranque no hay nada roto —el asistente está bajando el modelo— y una franja
+   roja arriba diría lo contrario. */
+.app[data-estado="sin-modelo"]::before {
+  background: var(--ambar);
+}
+
 .encabezado {
   display: flex;
   align-items: center;
@@ -223,6 +230,12 @@ button:disabled {
 
 .estado[data-estado="error"] .punto {
   background: var(--rojo);
+}
+
+/* Sin latido: no está pasando nada, falta que el usuario haga algo. La
+   animación es para lo que está en curso. */
+.estado[data-estado="sin-modelo"] .punto {
+  background: var(--ambar);
 }
 
 /* Grabando: el único estado que se anuncia con color de fondo. Es el que tiene

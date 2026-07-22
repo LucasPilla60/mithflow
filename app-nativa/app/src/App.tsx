@@ -108,6 +108,13 @@ export default function App() {
   const mostrarAsistente = asistenteAbierto && !asistenteCerrado;
   const clave = estado?.estado ?? "cargando";
 
+  // Con el asistente en pantalla, "Falta el modelo" arriba repite lo que la
+  // pantalla entera ya está diciendo ("Bajando el modelo…", con su barra de
+  // progreso), y pausar un dictado que todavía no puede existir no significa
+  // nada. Los dos se guardan SÓLO para ese estado: un error de verdad se sigue
+  // mostrando, porque esconderlo sería mentir en el otro sentido.
+  const ocultarPastilla = mostrarAsistente && clave === "sin-modelo";
+
   return (
     <div className="app" data-estado={clave}>
       <header className="encabezado">
@@ -116,18 +123,20 @@ export default function App() {
           {catalogo && <span className="version">v{catalogo.version}</span>}
         </div>
 
-        <div
-          className={estado?.pausado ? "estado pausado" : "estado"}
-          data-estado={clave}
-          role="status"
-          aria-live="polite"
-        >
-          <span className="punto" />
-          <span className="etiqueta">{estado ? estado.etiqueta : "Conectando…"}</span>
-          {estado?.pausado && <span className="pausa">en pausa</span>}
-        </div>
+        {!ocultarPastilla && (
+          <div
+            className={estado?.pausado ? "estado pausado" : "estado"}
+            data-estado={clave}
+            role="status"
+            aria-live="polite"
+          >
+            <span className="punto" />
+            <span className="etiqueta">{estado ? estado.etiqueta : "Conectando…"}</span>
+            {estado?.pausado && <span className="pausa">en pausa</span>}
+          </div>
+        )}
 
-        {estado && (
+        {estado && !ocultarPastilla && (
           <button type="button" className="boton chico" onClick={alternarPausa}>
             {estado.pausado ? "Reanudar" : "Pausar"}
           </button>
@@ -158,9 +167,9 @@ export default function App() {
       <main className="contenido">
         {fallo && <p className="error-vista">No pude hablar con el backend: {fallo}</p>}
 
-        {/* Con el asistente abierto el detalle sobra: el único error posible
-            ahí es "no hay ningún modelo descargado", y el asistente ES la
-            respuesta a eso. Repetirlo arriba hace ver rota una pantalla de
+        {/* Con el asistente abierto el detalle sobra: lo único que puede decir
+            ahí es "todavía no hay ningún modelo descargado", y el asistente ES
+            la respuesta a eso. Repetirlo arriba hace ver rota una pantalla de
             bienvenida. */}
         {estado?.detalle && !mostrarAsistente && (
           <p className="detalle-estado">{estado.detalle}</p>

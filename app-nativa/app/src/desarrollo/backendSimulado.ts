@@ -231,10 +231,14 @@ export function instalarBackendSimulado(escenario: Escenario) {
       ? { estado: "grabando", etiqueta: "Grabando", detalle: null, pausado: false }
       : escenario === "primer-arranque"
         ? {
-            estado: "error",
-            etiqueta: "Error",
+            // Copia exacta de lo que publica `Estado::SinModelo`. NO es
+            // "error": el primer arranque no tiene nada roto, y si este
+            // simulado mintiera, el próximo que mire la pantalla de bienvenida
+            // en el navegador vería el bug que ya no existe.
+            estado: "sin-modelo",
+            etiqueta: "Falta el modelo",
             detalle:
-              "no hay ningún modelo descargado. Abrí Ajustes y descargá uno para poder dictar.",
+              "todavía no hay ningún modelo descargado. Bajá uno desde Ajustes para poder dictar.",
             pausado: false,
           }
         : { estado: "listo", etiqueta: "Listo", detalle: null, pausado: false };
