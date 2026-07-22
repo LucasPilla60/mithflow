@@ -250,7 +250,7 @@ export function instalarBackendSimulado(escenario: Escenario) {
     modelo_de_perfilado: "Q4_K_M",
     limite_grabacion_minimo: 15,
     limite_grabacion_maximo: 600,
-    version: "0.1.0",
+    version: "1.0.0",
   });
 
   /** Simula una descarga: unos tramos de progreso y el final. */

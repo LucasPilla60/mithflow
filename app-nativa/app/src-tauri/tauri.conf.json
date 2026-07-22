@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "MithFlow",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "identifier": "com.mithdata.mithflow",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -28,7 +28,12 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["nsis"],
+    "publisher": "MithData",
+    "copyright": "© 2026 MithData",
+    "category": "Productivity",
+    "shortDescription": "Dictado por voz local",
+    "longDescription": "MithFlow transcribe lo que dictás y lo pega donde tengas el cursor. Todo pasa en esta máquina: el audio nunca sale de acá y no hay ninguna cuenta que crear. Apretá F9, hablá, soltá.",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -38,6 +43,15 @@
     ],
     "resources": {
       "transcribe-libs/*": "."
+    },
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "languages": ["Spanish", "SpanishInternational", "English"],
+        "displayLanguageSelector": false,
+        "compression": "lzma",
+        "installerIcon": "icons/icon.ico"
+      }
     }
   }
 }

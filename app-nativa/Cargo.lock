@@ -2664,7 +2664,7 @@ dependencies = [
 
 [[package]]
 name = "mithflow-app"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "chrono",
  "mithflow-core",
@@ -2682,14 +2682,14 @@ dependencies = [
 
 [[package]]
 name = "mithflow-cli"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "mithflow-core",
 ]
 
 [[package]]
 name = "mithflow-core"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "arboard",
  "chrono",
