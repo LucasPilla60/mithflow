@@ -286,7 +286,9 @@ export default function VistaAjustes({ alCambiarCatalogo, avisar }: Props) {
           motor todavía no haya arrancado por no haber ningún modelo —arriba dice
           "Falta el modelo"—: ahí el primero que bajes lo arranca solo, sin
           reiniciar. Si arriba dice "Error" no alcanza con bajar un modelo,
-          porque lo que falla es otra cosa y el motivo está a la vista.
+          porque lo que falla es otra cosa y el motivo está a la vista. Y si
+          elegís justo el que el motor ya tiene entre manos no cambia nada, así
+          que tampoco te va a pedir que reinicies.
         </p>
         <div className="modelos separado">
           <div className="fila-modelo">

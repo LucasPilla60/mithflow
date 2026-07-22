@@ -177,7 +177,7 @@ pub fn resolver_y_lanzar(
     app: &AppHandle,
     al_director: &Sender<Mensaje>,
     cfg: &Ajustes,
-) -> Result<Sender<AlMotor>, FalloDelMotor> {
+) -> Result<Motor, FalloDelMotor> {
     // Sin dónde escribir el historial no hay dictado, y no es algo que se
     // arregle descargando un modelo: es una falla.
     let historial = rutas::historial(app).map_err(FalloDelMotor::Roto)?;
@@ -189,7 +189,36 @@ pub fn resolver_y_lanzar(
         eventos::aviso(app, &aviso, "info");
     }
     println!("cargando el modelo {}…", ruta.display());
-    Ok(lanzar(al_director.clone(), ruta, historial, cfg.clone()))
+    Ok(Motor {
+        al_motor: lanzar(al_director.clone(), ruta.clone(), historial, cfg.clone()),
+        modelo: Some(ruta),
+    })
+}
+
+/// El motor visto desde afuera: por dónde mandarle trabajo y con qué `.gguf`
+/// arrancó.
+///
+/// La ruta viaja con el canal porque el director tiene que poder contestar una
+/// pregunta que sólo él sabe: si el modelo que el usuario acaba de elegir en
+/// Ajustes es **el que ya se está cargando**. Sin eso, la app le pide reiniciar
+/// justo cuando no hace falta (ver `director::aviso_al_cambiar_el_modelo`).
+pub struct Motor {
+    pub al_motor: Sender<AlMotor>,
+    /// El archivo con el que se lanzó, o `None` si no hay motor.
+    pub modelo: Option<PathBuf>,
+}
+
+impl Motor {
+    /// Un canal sin nadie del otro lado, para cuando el motor no se pudo
+    /// resolver. Mandar audio ahí falla enseguida, que es exactamente lo que el
+    /// director sabe informar.
+    pub fn ausente() -> Self {
+        let (huerfano, _) = mpsc::channel();
+        Self {
+            al_motor: huerfano,
+            modelo: None,
+        }
+    }
 }
 
 /// Arranca el motor y devuelve el extremo por donde mandarle trabajo.
@@ -211,13 +240,37 @@ fn lanzar(
 ) -> Sender<AlMotor> {
     let (al_motor, cola) = mpsc::channel::<AlMotor>();
 
+    // El clon es para el caso malo: el `spawn` consume el closure —y con él el
+    // emisor— aunque falle, así que el aviso hay que poder mandarlo desde acá.
+    let hacia_el_director = al_director.clone();
     let creado = std::thread::Builder::new()
         .name("mithflow-motor".into())
         .spawn(move || trabajar(cola, al_director, modelo, historial, ajustes));
     if let Err(e) = creado {
-        eprintln!("no pude crear el hilo del motor: {e}");
+        avisar_que_el_hilo_no_arranco(&hacia_el_director, &e);
     }
     al_motor
+}
+
+/// Le cuenta al director que el hilo del motor **no existe**.
+///
+/// Sin esto la aplicación quedaba clavada en "Cargando…" **para siempre**: el
+/// canal que devuelve [`lanzar`] es perfectamente usable, pero su receptor se
+/// fue con el closure que nunca corrió, así que nadie va a mandar el
+/// `MotorListo` que mueve el estado. Y el pozo no tenía fondo: con el estado en
+/// `Cargando`, `director::tras_una_descarga` contesta `YaEstaCargando`, o sea
+/// que **ninguna descarga posterior lo recupera** — mientras la pantalla sigue
+/// prometiendo que en cuanto diga «Listo» se puede dictar.
+///
+/// Es [`FalloDelMotor::Roto`] y no `SinModelo` porque no falta ningún archivo:
+/// el sistema operativo no dio un hilo (memoria, límites del proceso). Descargar
+/// un modelo no lo arregla, y por eso el motivo dice lo único que sí lo arregla.
+fn avisar_que_el_hilo_no_arranco(al_director: &Sender<Mensaje>, error: &std::io::Error) {
+    let motivo = format!(
+        "No pude crear el hilo del motor ({error}). Cerrá MithFlow y volvé a abrirlo."
+    );
+    eprintln!("{motivo}");
+    let _ = al_director.send(Mensaje::MotorListo(Err(FalloDelMotor::Roto(motivo))));
 }
 
 fn trabajar(
@@ -514,6 +567,39 @@ mod tests {
         assert!(
             estado.detalle().is_some_and(|d| d.contains("Ajustes")),
             "el motivo tiene que decir dónde se arregla: {estado:?}"
+        );
+    }
+
+    /// El hilo del motor que no se pudo crear **tiene que contarse**.
+    ///
+    /// Antes se registraba en la consola y se devolvía igual un canal cuyo
+    /// receptor no existe: el director publicaba `Cargando` y nadie mandaba
+    /// nunca `MotorListo`, así que la aplicación quedaba en "Cargando…" para
+    /// siempre y ni una descarga posterior la sacaba de ahí. La única salida era
+    /// matar el proceso, y la pantalla decía lo contrario.
+    #[test]
+    fn un_hilo_del_motor_que_no_arranca_se_le_informa_al_director() {
+        let (al_director, cola) = mpsc::channel::<Mensaje>();
+
+        avisar_que_el_hilo_no_arranco(
+            &al_director,
+            &std::io::Error::other("no hay recursos para otro hilo"),
+        );
+
+        let Ok(Mensaje::MotorListo(Err(fallo))) = cola.try_recv() else {
+            panic!("el director no se enteró de que el motor no existe");
+        };
+        let estado = fallo.estado();
+        assert_eq!(
+            estado.clave(),
+            "error",
+            "no dar un hilo es una falla del sistema, no un modelo por descargar"
+        );
+        assert!(estado.es_falla());
+        let motivo = estado.detalle().unwrap_or_default().to_lowercase();
+        assert!(
+            motivo.contains("volvé a abrir") || motivo.contains("reinici"),
+            "el motivo tiene que dar la única salida que hay: {motivo}"
         );
     }
 

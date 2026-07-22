@@ -168,22 +168,68 @@ pub fn elegir_modelo(factor_tiempo_real: f32, ram_total_gb: f32, gpu_dedicada: b
     limitar_por_memoria(por_velocidad, ram_total_gb, gpu_dedicada)
 }
 
+/// La RAM del sistema que pide este modelo cuando los pesos NO viven en una
+/// placa con memoria propia.
+///
+/// Es la tabla de la que salen [`entra_en_memoria`] y, por lo tanto,
+/// [`limitar_por_memoria`]: un solo lugar decide qué modelo entra en qué
+/// máquina, y es también el que la interfaz muestra al lado de cada modelo. Si
+/// se copiara a mano en otro módulo, el aviso "este modelo no te entra" podría
+/// contradecir a la recomendación del perfilado.
+///
+/// El más chico devuelve `0.0` a propósito: es el piso del catálogo y **nunca**
+/// se descarta por memoria — si no entrara, no habría con qué dictar.
+pub fn ram_minima_gb(modelo: Modelo) -> f32 {
+    match modelo {
+        Modelo::F16 => RAM_MINIMA_F16_GB,
+        Modelo::Q5KM => RAM_MINIMA_Q5_GB,
+        Modelo::Q4KM => 0.0,
+    }
+}
+
+/// ¿Este modelo entra en esta máquina?
+///
+/// Con GPU dedicada entra cualquiera: los pesos viven en la VRAM y no compiten
+/// con el resto del sistema. Sin ella hay que llegar al piso de
+/// [`ram_minima_gb`].
+///
+/// Es pública porque la decisión de memoria hace falta en dos lugares más allá
+/// del perfilado: la sustitución de modelo del arranque —"uso el más grande que
+/// entre", no el más grande a secas— y el aviso de la interfaz. Que sea la misma
+/// función es lo que impide que se contradigan.
+pub fn entra_en_memoria(modelo: Modelo, ram_total_gb: f32, gpu_dedicada: bool) -> bool {
+    if gpu_dedicada {
+        return true;
+    }
+    let piso = ram_minima_gb(modelo);
+    // El piso del catálogo entra siempre, incluso con una RAM que no se pudo
+    // leer: descartarlo dejaría a la máquina sin ningún modelo posible.
+    piso <= 0.0 || !no_llega_a(ram_total_gb, piso)
+}
+
 /// Baja el modelo elegido si la memoria del sistema no lo banca.
 ///
 /// Sólo se aplica **sin GPU dedicada**: con una placa con VRAM propia los pesos
 /// no compiten con el resto del sistema, y es el caso de las dos máquinas del
 /// proyecto que tienen 32 y 64 GB igual.
+///
+/// La regla se expresa sobre [`entra_en_memoria`] y no con umbrales escritos
+/// otra vez acá: son la misma decisión mirada desde dos lados —"¿entra?" y
+/// "¿cuál pongo en su lugar?"— y separarlas sería dejarlas divergir.
 fn limitar_por_memoria(elegido: Modelo, ram_total_gb: f32, gpu_dedicada: bool) -> Modelo {
-    if gpu_dedicada {
+    if entra_en_memoria(elegido, ram_total_gb, gpu_dedicada) {
         return elegido;
     }
-    if no_llega_a(ram_total_gb, RAM_MINIMA_Q5_GB) {
-        return Modelo::Q4KM;
-    }
-    if no_llega_a(ram_total_gb, RAM_MINIMA_F16_GB) && elegido == Modelo::F16 {
-        return Modelo::Q5KM;
-    }
-    elegido
+    // El más grande de los que entran, sin subir por encima del elegido.
+    // `TODOS` va de mayor a menor y el más chico entra siempre, así que esta
+    // búsqueda no puede quedar vacía; el `unwrap_or` es por si el catálogo
+    // cambiara.
+    Modelo::TODOS
+        .into_iter()
+        .find(|m| {
+            m.bytes() < elegido.bytes() && entra_en_memoria(*m, ram_total_gb, gpu_dedicada)
+        })
+        .unwrap_or(elegido)
 }
 
 /// ¿`valor` se queda corto contra `piso`?
@@ -536,6 +582,64 @@ mod tests {
     fn una_ram_imposible_cae_del_lado_conservador() {
         assert_eq!(elegir_modelo(43.0, f32::NAN, false), Modelo::Q4KM);
         assert_eq!(elegir_modelo(43.0, 0.0, false), Modelo::Q4KM);
+    }
+
+    /// La pregunta "¿entra?" y la respuesta "¿cuál pongo?" tienen que contar lo
+    /// mismo: un modelo que [`entra_en_memoria`] acepta no puede ser bajado por
+    /// [`limitar_por_memoria`], y uno que rechaza no puede sobrevivir.
+    ///
+    /// Es la invariante que permite que la sustitución del arranque
+    /// (`rutas::modelo`) use `entra_en_memoria` sin repetir umbrales.
+    #[test]
+    fn entrar_en_memoria_y_limitar_por_memoria_dicen_lo_mismo() {
+        for ram in [0.0, 4.0, 5.9, 6.0, 8.0, 11.9, 12.0, 64.0, f32::NAN] {
+            for dedicada in [true, false] {
+                for modelo in Modelo::TODOS {
+                    let entra = entra_en_memoria(modelo, ram, dedicada);
+                    let limitado = limitar_por_memoria(modelo, ram, dedicada);
+                    assert_eq!(
+                        entra,
+                        limitado == modelo,
+                        "{modelo} con {ram} GB (dedicada: {dedicada}): entra={entra} pero \
+                         limitar devolvió {limitado}"
+                    );
+                    assert!(
+                        entra_en_memoria(limitado, ram, dedicada),
+                        "limitar devolvió {limitado}, que tampoco entra"
+                    );
+                }
+            }
+        }
+    }
+
+    /// El caso de la notebook de 8 GB, que es el que motiva todo esto: el `F16`
+    /// no entra, los otros dos sí. El piso del catálogo entra SIEMPRE, incluso
+    /// con una RAM que no se pudo leer.
+    #[test]
+    fn el_criterio_de_memoria_por_modelo() {
+        assert!(!entra_en_memoria(Modelo::F16, 8.0, false));
+        assert!(entra_en_memoria(Modelo::Q5KM, 8.0, false));
+        assert!(entra_en_memoria(Modelo::Q4KM, 8.0, false));
+
+        // Con placa propia entran todos.
+        for modelo in Modelo::TODOS {
+            assert!(entra_en_memoria(modelo, 8.0, true), "{modelo} con GPU dedicada");
+        }
+
+        // Una RAM ilegible es conservadora, pero nunca deja a la máquina sin
+        // ningún modelo posible.
+        assert!(!entra_en_memoria(Modelo::F16, f32::NAN, false));
+        assert!(!entra_en_memoria(Modelo::Q5KM, f32::NAN, false));
+        assert!(entra_en_memoria(Modelo::Q4KM, f32::NAN, false));
+    }
+
+    /// Los pisos que se publican son los mismos que decide el perfilado, y el
+    /// más chico no pide nada.
+    #[test]
+    fn la_ram_minima_sale_de_los_umbrales_del_perfilado() {
+        assert_eq!(ram_minima_gb(Modelo::F16), RAM_MINIMA_F16_GB);
+        assert_eq!(ram_minima_gb(Modelo::Q5KM), RAM_MINIMA_Q5_GB);
+        assert_eq!(ram_minima_gb(Modelo::Q4KM), 0.0);
     }
 
     /// Con VRAM propia los pesos no compiten con el sistema: la RAM total deja

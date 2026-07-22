@@ -135,12 +135,11 @@ fn preparar(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     handle.manage(AlDirector::nuevo(al_director.clone()));
     handle.manage(sonidos.clone());
 
-    let limite_grabacion_s = cfg.limite_grabacion_s as f32;
     // Si acá no se puede arrancar el motor, la aplicación sigue viva con un
     // canal muerto: el director publica `SinModelo` o `Error` según el caso, y
     // una descarga que termine bien lo vuelve a intentar sin reiniciar nada.
-    let al_motor = match motor::resolver_y_lanzar(&handle, &al_director, &cfg) {
-        Ok(canal) => canal,
+    let motor = match motor::resolver_y_lanzar(&handle, &al_director, &cfg) {
+        Ok(motor) => motor,
         Err(fallo) => motor_ausente(&al_director, fallo),
     };
     atajo::lanzar(al_director.clone());
@@ -148,22 +147,18 @@ fn preparar(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         handle.clone(),
         al_director,
         cola,
-        al_motor,
+        motor,
         espejo,
         sonidos,
-        limite_grabacion_s,
+        &cfg,
     );
     Ok(())
 }
 
-/// Un canal sin nadie del otro lado. Mandar audio ahí falla enseguida, que es
-/// exactamente lo que el director sabe informar.
-fn motor_ausente(
-    al_director: &mpsc::Sender<Mensaje>,
-    fallo: FalloDelMotor,
-) -> mpsc::Sender<motor::AlMotor> {
+/// El motor que no se pudo resolver: se le cuenta al director —que es quien
+/// sabe convertirlo en un estado visible— y se sigue con un canal huérfano.
+fn motor_ausente(al_director: &mpsc::Sender<Mensaje>, fallo: FalloDelMotor) -> motor::Motor {
     eprintln!("el motor no arranca: {}", fallo.motivo());
     let _ = al_director.send(Mensaje::MotorListo(Err(fallo)));
-    let (huerfano, _) = mpsc::channel();
-    huerfano
+    motor::Motor::ausente()
 }

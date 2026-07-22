@@ -1115,3 +1115,133 @@ sí tiene que verse: los textos nuevos mandan a mirarla ("en cuanto arriba diga
 - `cargo clippy --workspace --all-targets -- -D warnings`: limpio.
 - `npm run build` y `tsc --noEmit`: sin errores.
 - Instalador NSIS regenerado y copiado a `D:\MithFlow\instalador\`.
+
+---
+
+## Arreglo — tres defectos antes de instalar en las otras dos notebooks (22/7/2026)
+
+Los tres salieron de una auditoría y se cerraron juntos porque los tres muerden
+en la **misma máquina**: la notebook de ~8 GB con gráficos integrados, donde el
+usuario no va a estar para explicar nada ni para reiniciar la app.
+
+### 1. `"auto"` cargaba el modelo más grande descargado, mirara o no la máquina
+
+`rutas::modelo` resolvía la sustitución con
+`Modelo::TODOS.into_iter().find(esta_descargado)`. `TODOS` va **de mayor a
+menor**, así que `find` devolvía siempre el más pesado que hubiera en el disco.
+Y `"auto"` está documentado en `ajustes.rs` como "el que diga el perfilado de
+hardware", que es exactamente lo que esa línea no consultaba.
+
+En una notebook de 8 GB con un `F16` en el disco —bajado a mano desde Ajustes,
+copiado de otra máquina— eso cargaba 1,5 GB de pesos que según
+`hardware::RAM_MINIMA_F16_GB = 12.0` no entran. El aviso que protege de eso
+(`noEntra`) vive **sólo en el asistente**: ni Ajustes ni esta sustitución lo
+tenían.
+
+**El arreglo es un criterio de memoria compartido, no una copia de los
+umbrales.** `hardware` expone ahora `ram_minima_gb(modelo)` y
+`entra_en_memoria(modelo, ram, gpu_dedicada)`, y `limitar_por_memoria` —la
+función que ya decidía esto para el perfilado— quedó **escrita sobre
+`entra_en_memoria`** en vez de repetir los `if`. Son la misma decisión mirada
+desde dos lados ("¿entra?" y "¿cuál pongo en su lugar?") y hay un test que las
+recorre juntas: un modelo que `entra_en_memoria` acepta no puede ser bajado por
+`limitar_por_memoria`, y uno que rechaza no puede sobrevivir.
+
+La sustitución elige **el más grande que entre**; si no entra ninguno, el más
+chico que haya —el que menos aprieta— y lo dice: "pide unos 12 GB de RAM y esta
+máquina tiene 8… bajá uno más chico desde Ajustes". No dictar no es mejor que
+dictar despacio, pero cargarlo en silencio sí es peor que las dos cosas.
+
+**El paso 2 no se toca**: un modelo elegido a mano y descargado se carga igual.
+La interfaz muestra al lado de cada uno cuánta RAM pide (`ram_minima_gb`, que
+ahora sale del núcleo y no de una tabla propia en `comandos.rs`) y la decisión
+es del usuario. Lo que se arregló es lo que la app decide **por él**.
+
+**Preguntarle a `wgpu` cuesta, así que se pregunta sólo si puede cambiar la
+respuesta.** `describir_gpu()` enumera los adaptadores de Vulkan y DX12 —cientos
+de milisegundos en el camino de arranque—; cuando todos los modelos descargados
+entran por RAM del sistema, tener o no placa dedicada no cambia cuál se elige.
+El escritorio y la MSI Katana no llegan a preguntar; la notebook chica, una vez.
+
+### 2. Si fallaba el `spawn` del hilo del motor, la app quedaba en "Cargando…" para siempre
+
+`motor::lanzar` registraba el error en la consola y devolvía **igual** un
+`Sender` cuyo receptor se había ido con el closure que nunca corrió. El director
+lo guardaba, publicaba `Cargando`, y nadie iba a mandar nunca `MotorListo`.
+
+Lo peor era que no tenía fondo: con el estado en `Cargando`,
+`tras_una_descarga` contesta `YaEstaCargando`, así que **ninguna descarga
+posterior lo recuperaba**. La única salida era matar el proceso — mientras la
+pantalla prometía que en cuanto dijera «Listo» se podía dictar.
+
+Ahora la rama `Err` manda `MotorListo(Err(FalloDelMotor::Roto(…)))` antes de
+devolver el canal huérfano: el estado pasa a `Error` en rojo y el motivo dice la
+única salida que hay ("Cerrá MithFlow y volvé a abrirlo"). Es `Roto` y no
+`SinModelo` porque no falta ningún archivo: el sistema operativo no dio un hilo,
+y descargar un modelo no arregla eso.
+
+El aviso se extrajo a `avisar_que_el_hilo_no_arranco` para poder probarlo: forzar
+que `Builder::spawn` falle no es razonable, pero que el director se entere sí
+tiene que estar cubierto. El clon del emisor es obligatorio, y no cosmético: el
+`spawn` consume el closure —y con él el `Sender`— aunque falle.
+
+### 3. Se pedía "reiniciá" justo cuando el motor cargaba ese mismo modelo
+
+`comandos::escribir_ajustes` avisaba "El modelo cambia la próxima vez que abras
+MithFlow" mirando **sólo** `guardados.modelo != anteriores.modelo`, sin mirar el
+motor. El camino más común del asistente lo disparaba siempre:
+
+1. el ajuste arranca en `"auto"`;
+2. se baja el `Q4_K_M` → "Modelo descargado. Estoy cargando el motor; en cuanto
+   diga «Listo» podés dictar.";
+3. el perfilado recomienda `Q4_K_M` y el asistente escribe `modelo: "Q4_K_M"`;
+4. `"auto" != "Q4_K_M"` → **"El modelo cambia la próxima vez que abras
+   MithFlow."** Falso: el motor está cargando ese mismo archivo;
+5. la pantalla final dice que el modelo está cargado y ya se puede dictar.
+
+Tres mensajes seguidos, dos contradictorios, en el primer minuto de uso.
+
+**La decisión se mudó a donde está la información.** El comando ve que la clave
+cambió y nada más; si hay motor y con qué archivo lo sabe el director. Ahora
+`Mensaje::Ajustados` la lleva hasta allá y la contesta
+`director::aviso_al_cambiar_el_modelo`, que **reusa `tras_una_descarga`** en vez
+de duplicar la regla: es literalmente la misma pregunta ("¿esto se usa ahora o
+al reiniciar?"). Lo único que agrega es lo que una descarga no necesita: si el
+`.gguf` que el motor tiene entre manos ya es el elegido, no cambia nada y no hay
+nada que avisar.
+
+Para eso el director guarda `modelo_en_el_motor`, que le llega en el nuevo
+`motor::Motor { al_motor, modelo }` — el mismo tipo por los **dos** caminos de
+arranque (el de la aplicación y el de la descarga en caliente), que es lo que
+impide que diverjan. `Motor::ausente()` reemplaza al canal huérfano que armaba
+`main.rs` a mano.
+
+La comparación es **por nombre de archivo** y no por ruta, igual que en
+`motor::es_el_modelo_de_perfilado`: `MITHFLOW_MODELO` puede apuntar al mismo
+modelo fuera de `%APPDATA%` y sigue siendo el mismo modelo. `"auto"` no nombra
+ningún archivo, así que nunca cuenta como igual: conservador en la dirección
+correcta —en el peor caso se avisa de más, nunca se niega lo que el usuario
+acaba de hacer.
+
+Y las simetrías, que son la mitad que no se puede aflojar y tienen test propio:
+elegir **otro** modelo con el motor cargando o cargado sigue avisando; con
+`Error` también, porque el cambio tampoco aplica solo; sin motor
+(`SinModelo`) no se avisa nada, porque no hay nada que reiniciar.
+
+`backendSimulado.ts` reproduce las dos guardas (lleva su propio
+`modeloEnElMotor`): un simulado que enseñe el bug arreglado es peor que no
+tenerlo.
+
+### Verificación
+
+- `cargo test --workspace`: **94 núcleo + 86 app** (eran 91 y 75). Los catorce
+  nuevos cubren: el criterio de memoria por modelo y su equivalencia con
+  `limitar_por_memoria` (barriendo RAM, `NaN` y placa dedicada); la sustitución
+  en una máquina grande, en una chica, cuando no entra ninguno y sin nada
+  descargado; que el aviso aparezca sólo cuando hay algo que contar; que un hilo
+  de motor que no arranca se le informe al director como falla con salida; y los
+  cuatro caminos del cambio de modelo en Ajustes, incluido el del asistente que
+  disparaba el aviso falso.
+- `cargo clippy --workspace --all-targets -- -D warnings`: limpio.
+- `npm run build`: sin errores de TypeScript.
+- Instalador NSIS regenerado y copiado a `D:\MithFlow\instalador\`.

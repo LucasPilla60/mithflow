@@ -21,6 +21,7 @@ use crate::sonidos::{Sonidos, Tono};
 use crate::{atajo, eventos};
 use mithflow_core::audio::Recorder;
 use mithflow_core::{config, history, DictationResult};
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
 use std::sync::Arc;
 use std::time::Duration;
@@ -112,11 +113,13 @@ pub fn lanzar(
     app: AppHandle,
     al_director: Sender<Mensaje>,
     cola: Receiver<Mensaje>,
-    al_motor: Sender<AlMotor>,
+    motor: motor::Motor,
     espejo: Arc<EstadoCompartido>,
     sonidos: Sonidos,
-    limite_grabacion_s: f32,
+    cfg: &Ajustes,
 ) {
+    let limite_grabacion_s = cfg.limite_grabacion_s as f32;
+    let modelo_elegido = cfg.modelo.clone();
     let creado = std::thread::Builder::new()
         .name("mithflow-director".into())
         .spawn(move || {
@@ -126,7 +129,9 @@ pub fn lanzar(
                 estado: Estado::Cargando,
                 pausado: false,
                 grabadora: None,
-                al_motor,
+                al_motor: motor.al_motor,
+                modelo_en_el_motor: motor.modelo,
+                modelo_elegido,
                 espejo,
                 sonidos,
                 limite_grabacion_s,
@@ -149,6 +154,19 @@ struct Director {
     /// Windows se apaga y en una notebook eso es batería.
     grabadora: Option<Recorder>,
     al_motor: Sender<AlMotor>,
+    /// El `.gguf` con el que se lanzó el motor, si se lanzó alguno.
+    ///
+    /// **Es la única información que hay para no mentirle al usuario cuando
+    /// elige un modelo en Ajustes**: el estado dice si hay motor y qué está
+    /// haciendo, pero no con qué archivo, y avisar "el modelo cambia la próxima
+    /// vez que abras MithFlow" mientras el motor está cargando **ese mismo
+    /// archivo** es negar lo que el usuario acaba de hacer. Ver
+    /// [`aviso_al_cambiar_el_modelo`].
+    modelo_en_el_motor: Option<PathBuf>,
+    /// La clave de modelo que hay guardada en Ajustes (`"auto"`, `"F16"`…).
+    /// Vive acá y no en el comando porque es el director quien puede decidir
+    /// qué significa cambiarla.
+    modelo_elegido: String,
     espejo: Arc<EstadoCompartido>,
     sonidos: Sonidos,
     /// Tope de duración de una grabación, configurable desde Ajustes.
@@ -240,8 +258,12 @@ impl Director {
     fn lanzar_el_motor(&mut self) {
         let cfg = ajustes::cargar(&self.app);
         match motor::resolver_y_lanzar(&self.app, &self.al_director, &cfg) {
-            Ok(al_motor) => {
-                self.al_motor = al_motor;
+            Ok(motor) => {
+                self.al_motor = motor.al_motor;
+                // Con qué archivo arrancó importa después: es lo que evita
+                // pedirle que reinicie a quien elige en Ajustes justo el modelo
+                // que se está cargando (ver `aviso_al_cambiar_el_modelo`).
+                self.modelo_en_el_motor = motor.modelo;
                 self.cambiar(estado_al_lanzar_en_caliente());
                 eventos::aviso(&self.app, TrasLaDescarga::Lanzar.aviso(), "info");
             }
@@ -296,8 +318,22 @@ impl Director {
     /// dictado. El tope nuevo rige desde la grabación siguiente: cambiarlo en
     /// medio de una ya empezada sería cortarle el dictado al usuario mientras
     /// habla.
+    ///
+    /// El cambio de modelo se decide **acá y no en el comando** por la misma
+    /// razón que la descarga: el comando puede ver que la clave cambió, pero no
+    /// si hay un motor ni con qué archivo. Ver [`aviso_al_cambiar_el_modelo`].
     fn aplicar_ajustes(&mut self, nuevos: Box<Ajustes>) {
         self.limite_grabacion_s = nuevos.limite_grabacion_s as f32;
+        if nuevos.modelo != self.modelo_elegido {
+            self.modelo_elegido = nuevos.modelo.clone();
+            if let Some(aviso) = aviso_al_cambiar_el_modelo(
+                &self.estado,
+                self.modelo_en_el_motor.as_deref(),
+                &self.modelo_elegido,
+            ) {
+                eventos::aviso(&self.app, aviso, "info");
+            }
+        }
         if self.al_motor.send(AlMotor::Ajustes(nuevos)).is_err() {
             eprintln!("el motor no está escuchando: los ajustes del dictado no se aplicaron");
         }
@@ -568,9 +604,73 @@ fn tras_una_descarga(estado: &Estado) -> TrasLaDescarga {
     }
 }
 
+/// El aviso que corresponde cuando el usuario elige otro modelo en Ajustes, o
+/// `None` si no hay nada que contar.
+///
+/// # Qué se estaba diciendo mal
+///
+/// El comando avisaba "El modelo cambia la próxima vez que abras MithFlow"
+/// mirando **sólo** que la clave guardada fuera distinta de la anterior. En el
+/// camino más común del asistente eso es falso: el ajuste arranca en `"auto"`,
+/// se baja el `Q4_K_M`, el motor empieza a cargar **ese** archivo, el perfilado
+/// lo recomienda y el asistente escribe `modelo: "Q4_K_M"`. La clave cambió,
+/// pero el modelo no: el usuario recibía "reiniciá" entre el aviso de que el
+/// motor está cargando y la pantalla final que dice que ya puede dictar. Tres
+/// mensajes, dos contradictorios, en el primer minuto de uso.
+///
+/// # Por qué la decisión vive acá
+///
+/// Porque acá está la información. La pregunta "¿esto se usa ahora o al
+/// reiniciar?" es la **misma** que después de una descarga, así que la contesta
+/// el mismo [`tras_una_descarga`] y no una regla paralela que pueda divergir. Lo
+/// único que se agrega es lo que una descarga no necesita: si el archivo que el
+/// motor tiene entre manos ya es el que se acaba de elegir, no cambia nada y no
+/// hay nada que avisar.
+fn aviso_al_cambiar_el_modelo(
+    estado: &Estado,
+    en_el_motor: Option<&Path>,
+    elegido: &str,
+) -> Option<&'static str> {
+    if es_el_mismo_modelo(en_el_motor, elegido) {
+        return None;
+    }
+    match tras_una_descarga(estado) {
+        // No hay motor: no hay nada que reiniciar. El modelo elegido se va a
+        // usar apenas haya uno, que es lo que hace la descarga siguiente.
+        TrasLaDescarga::Lanzar => None,
+        // Hay un motor —cargándose o cargado— con otro archivo, o una falla que
+        // sólo se sale reiniciando. Acá el aviso es verdad.
+        TrasLaDescarga::YaEstaCargando | TrasLaDescarga::AlReiniciar => {
+            Some("El modelo cambia la próxima vez que abras MithFlow.")
+        }
+    }
+}
+
+/// ¿El motor está cargando (o ya cargó) justamente el modelo que se eligió?
+///
+/// Se compara por **nombre de archivo** y no por ruta completa, por la misma
+/// razón que en `motor::es_el_modelo_de_perfilado`: `MITHFLOW_MODELO` puede
+/// apuntar al mismo modelo fuera de `%APPDATA%`, y lo que decide es cuál es, no
+/// dónde está guardado.
+///
+/// `"auto"` contesta `false` a propósito: no nombra un archivo, así que no se
+/// puede afirmar que sea el mismo sin volver a resolver la sustitución —que mide
+/// memoria y mira el disco— desde el hilo del director. Conservador en la
+/// dirección correcta: en el peor caso se avisa de más, nunca se niega lo que el
+/// usuario acaba de hacer.
+fn es_el_mismo_modelo(en_el_motor: Option<&Path>, elegido: &str) -> bool {
+    let (Some(cargado), Some(modelo)) = (en_el_motor, ajustes::modelo_de_clave(elegido)) else {
+        return false;
+    };
+    cargado
+        .file_name()
+        .is_some_and(|nombre| nombre == modelo.nombre_archivo())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mithflow_core::models::Modelo;
 
     /// `AlDirector` y `Sonidos` viven en el estado manejado por Tauri, que
     /// exige `Send + Sync + 'static`. Si `mpsc::Sender` dejara de ser `Sync`,
@@ -794,6 +894,96 @@ mod tests {
                 "{caso:?} le pide al usuario lo que acaba de hacer: {texto}"
             );
         }
+    }
+
+    /// Dónde vive un modelo del catálogo, para los tests que comparan lo que
+    /// tiene el motor con lo que se elige en Ajustes.
+    fn en_disco(modelo: Modelo) -> PathBuf {
+        PathBuf::from("C:\\Users\\quien\\AppData\\Roaming\\MithFlow\\models")
+            .join(modelo.nombre_archivo())
+    }
+
+    /// **La misma regla, del otro lado: ningún aviso puede negar lo que el
+    /// usuario acaba de hacer.** Éste es el camino más común del asistente, y
+    /// hasta acá quedaba afuera:
+    ///
+    /// 1. el ajuste arranca en `"auto"`;
+    /// 2. se baja el `Q4_K_M` → "Modelo descargado. Estoy cargando el motor…";
+    /// 3. el perfilado lo recomienda y el asistente escribe `modelo: "Q4_K_M"`;
+    /// 4. **acá** salía "El modelo cambia la próxima vez que abras MithFlow",
+    ///    que era falso: el motor está cargando ese mismo archivo;
+    /// 5. la pantalla final dice que ya se puede dictar.
+    #[test]
+    fn elegir_el_modelo_que_el_motor_ya_esta_cargando_no_avisa_nada() {
+        let cargando = estado_al_lanzar_en_caliente();
+        let en_el_motor = en_disco(Modelo::Q4KM);
+
+        assert_eq!(
+            aviso_al_cambiar_el_modelo(&cargando, Some(&en_el_motor), "Q4_K_M"),
+            None,
+            "el motor está cargando ese mismo archivo: pedir reiniciar es mentir"
+        );
+
+        // Y lo mismo con el motor ya cargado: elegir a mano el que se está
+        // usando no cambia nada, así que tampoco hay nada que avisar.
+        assert_eq!(
+            aviso_al_cambiar_el_modelo(&Estado::Listo, Some(&en_el_motor), "Q4_K_M"),
+            None
+        );
+    }
+
+    /// La mitad simétrica, que es la que no se puede aflojar: elegir un modelo
+    /// **distinto** del que el motor tiene sí cambia algo, y recién al
+    /// reiniciar. Callarlo sería la mentira al revés.
+    #[test]
+    fn elegir_otro_modelo_sigue_avisando_que_cambia_al_reiniciar() {
+        let en_el_motor = en_disco(Modelo::Q4KM);
+        for estado in [
+            estado_al_lanzar_en_caliente(),
+            Estado::Listo,
+            Estado::Grabando,
+            Estado::Transcribiendo,
+        ] {
+            let aviso = aviso_al_cambiar_el_modelo(&estado, Some(&en_el_motor), "F16")
+                .unwrap_or_else(|| panic!("{estado:?} tiene un motor con otro modelo"));
+            assert!(
+                aviso.to_lowercase().contains("reinici") || aviso.contains("próxima vez"),
+                "{estado:?}: {aviso}"
+            );
+        }
+    }
+
+    /// Sin motor no hay nada que reiniciar. El primer arranque entra por acá:
+    /// el asistente escribe el modelo elegido con la app en `SinModelo`, y
+    /// mandarlo a reiniciar una aplicación que todavía no cargó nada es la
+    /// misma fricción que el arreglo anterior vino a sacar.
+    #[test]
+    fn elegir_un_modelo_sin_motor_no_manda_a_reiniciar() {
+        let sin_modelo = Estado::SinModelo("todavía no hay ningún modelo".into());
+        assert_eq!(aviso_al_cambiar_el_modelo(&sin_modelo, None, "F16"), None);
+        assert_eq!(aviso_al_cambiar_el_modelo(&sin_modelo, None, "auto"), None);
+    }
+
+    /// Una falla real no se calla: con `Error` el cambio de modelo tampoco
+    /// aplica solo, y el usuario tiene que saber que hace falta reiniciar.
+    #[test]
+    fn con_una_falla_publicada_el_cambio_de_modelo_sigue_avisando() {
+        let roto = Estado::Error("el atajo no se enganchó".into());
+        assert!(aviso_al_cambiar_el_modelo(&roto, None, "F16").is_some());
+    }
+
+    /// La comparación es por nombre de archivo: `MITHFLOW_MODELO` puede apuntar
+    /// al mismo modelo fuera de `%APPDATA%` y sigue siendo el mismo modelo.
+    /// `"auto"` no nombra ningún archivo, así que nunca cuenta como igual.
+    #[test]
+    fn el_modelo_del_motor_se_reconoce_por_su_nombre_de_archivo() {
+        let en_otro_lado = PathBuf::from("D:\\MithFlow\\app-nativa\\models")
+            .join(Modelo::Q5KM.nombre_archivo());
+        assert!(es_el_mismo_modelo(Some(&en_otro_lado), "Q5_K_M"));
+        assert!(es_el_mismo_modelo(Some(&en_otro_lado), "q5_k_m"), "la clave no distingue mayúsculas");
+        assert!(!es_el_mismo_modelo(Some(&en_otro_lado), "F16"));
+        assert!(!es_el_mismo_modelo(Some(&en_otro_lado), "auto"));
+        assert!(!es_el_mismo_modelo(None, "Q5_K_M"), "sin motor no hay con qué comparar");
     }
 
     /// Sólo el caso que de verdad lo resuelve deja de pedir reiniciar. Mandar a

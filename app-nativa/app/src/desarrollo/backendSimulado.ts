@@ -259,6 +259,16 @@ export function instalarBackendSimulado(escenario: Escenario) {
           }
         : LISTO;
 
+  /**
+   * Con qué modelo se lanzó el motor, o `null` si no hay motor. Es el
+   * `Director::modelo_en_el_motor` del backend real.
+   *
+   * En el escenario normal el ajuste es `"auto"` y el escritorio simulado tiene
+   * 64 GB con placa dedicada, así que la sustitución de `rutas::modelo` elige el
+   * más pesado descargado. En el primer arranque no hay motor.
+   */
+  let modeloEnElMotor: string | null = escenario === "primer-arranque" ? null : "F16";
+
   /** Publica un estado nuevo, como hace `Director::publicar`. */
   const publicar = (nuevo: EstadoDto) => {
     estado = nuevo;
@@ -293,9 +303,10 @@ export function instalarBackendSimulado(escenario: Escenario) {
    * comportamiento que la app no tiene — que es justo para lo que NO sirve un
    * simulado.
    */
-  function trasLaDescarga() {
+  function trasLaDescarga(clave: string) {
     // `Lanzar`: no había motor y esta descarga lo arranca.
     if (estado.estado === "sin-modelo") {
+      modeloEnElMotor = clave;
       publicar(CARGANDO);
       void emit("aviso", {
         texto:
@@ -340,8 +351,27 @@ export function instalarBackendSimulado(escenario: Escenario) {
         terminado,
         error: null,
       });
-      if (terminado) trasLaDescarga();
+      if (terminado) trasLaDescarga(clave);
     }, 350);
+  }
+
+  /**
+   * Lo que hace `director::aviso_al_cambiar_el_modelo` cuando el usuario elige
+   * otro modelo en Ajustes.
+   *
+   * **Las dos guardas son el arreglo**, y sin ellas este simulado enseñaría el
+   * bug que se acaba de cerrar: el asistente escribe el modelo recomendado
+   * mientras el motor está cargando **ese mismo archivo**, y avisar "reiniciá"
+   * ahí es negar lo que el usuario acaba de hacer. Sin motor tampoco hay nada
+   * que reiniciar.
+   */
+  function avisarAlCambiarElModelo(elegido: string) {
+    if (modeloEnElMotor !== null && elegido === modeloEnElMotor) return;
+    if (estado.estado === "sin-modelo") return;
+    void emit("aviso", {
+      texto: "El modelo cambia la próxima vez que abras MithFlow.",
+      nivel: "info",
+    });
   }
 
   mockIPC(
@@ -355,7 +385,11 @@ export function instalarBackendSimulado(escenario: Escenario) {
           return ajustes;
         case "escribir_ajustes": {
           const nuevos = (args as { nuevos: Ajustes }).nuevos;
+          const cambioElModelo = nuevos.modelo !== ajustes.modelo;
           Object.assign(ajustes, nuevos);
+          // El aviso lo decide el director, no el comando: por eso va acá y con
+          // sus guardas, igual que en `aplicar_ajustes`.
+          if (cambioElModelo) avisarAlCambiarElModelo(ajustes.modelo);
           return ajustes;
         }
         case "leer_metricas":

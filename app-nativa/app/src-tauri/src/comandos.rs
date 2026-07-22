@@ -74,6 +74,18 @@ pub fn leer_ajustes(app: AppHandle) -> Ajustes {
 /// los sonidos y el autoarranque. El modelo recién cambia al reiniciar, porque
 /// cargarlo son 1,8 s y 1,5 GB de memoria: se avisa en vez de hacerlo a
 /// escondidas.
+///
+/// # Por qué ese aviso NO se emite acá
+///
+/// Porque desde acá no se puede saber si es verdad. Este comando ve que la clave
+/// guardada cambió y nada más; **si hay un motor y con qué archivo lo sabe el
+/// director**, y en el camino más común del asistente —`"auto"`, se baja el
+/// `Q4_K_M`, el motor empieza a cargarlo, el perfilado lo recomienda y se guarda
+/// `"Q4_K_M"`— la clave cambia sin que cambie el modelo. Avisar acá era decirle
+/// al usuario que reinicie justo cuando el motor está cargando lo que acaba de
+/// elegir. La decisión viaja con [`Mensaje::Ajustados`] y la toma
+/// `director::aviso_al_cambiar_el_modelo`, sobre la misma regla que las
+/// descargas.
 #[tauri::command]
 pub fn escribir_ajustes(
     app: AppHandle,
@@ -94,13 +106,6 @@ pub fn escribir_ajustes(
 
     if guardados.arranque_con_windows != anteriores.arranque_con_windows {
         aplicar_autoarranque(&app, guardados.arranque_con_windows);
-    }
-    if guardados.modelo != anteriores.modelo {
-        eventos::aviso(
-            &app,
-            "El modelo cambia la próxima vez que abras MithFlow.",
-            "info",
-        );
     }
     Ok(guardados)
 }
@@ -269,17 +274,6 @@ pub struct ModeloDto {
     pub ram_minima_gb: f32,
 }
 
-/// La RAM que este modelo necesita cuando los pesos viven en memoria del
-/// sistema. Sale de los mismos umbrales con los que decide el perfilado, para
-/// que el aviso de la interfaz y la recomendación no puedan contradecirse.
-fn ram_minima_gb(modelo: Modelo) -> f32 {
-    match modelo {
-        Modelo::F16 => hardware::RAM_MINIMA_F16_GB,
-        Modelo::Q5KM => hardware::RAM_MINIMA_Q5_GB,
-        Modelo::Q4KM => 0.0,
-    }
-}
-
 #[tauri::command]
 pub fn leer_catalogo() -> Catalogo {
     Catalogo {
@@ -292,7 +286,11 @@ pub fn leer_catalogo() -> Catalogo {
                 etiqueta: m.to_string(),
                 megabytes: m.megabytes(),
                 descargado: models::esta_descargado(m),
-                ram_minima_gb: ram_minima_gb(m),
+                // Del núcleo y no de una tabla propia: es el mismo piso con el
+                // que el perfilado recomienda y con el que el arranque
+                // sustituye, así que el aviso de la interfaz no puede
+                // contradecirlos.
+                ram_minima_gb: hardware::ram_minima_gb(m),
             })
             .collect(),
         modelo_de_perfilado: clave_modelo(Modelo::DE_PERFILADO),
@@ -550,10 +548,22 @@ mod tests {
     /// recomienda.
     #[test]
     fn la_ram_minima_que_se_informa_es_la_que_usa_el_perfilado() {
-        assert_eq!(ram_minima_gb(Modelo::F16), hardware::RAM_MINIMA_F16_GB);
-        assert_eq!(ram_minima_gb(Modelo::Q5KM), hardware::RAM_MINIMA_Q5_GB);
+        let catalogo = leer_catalogo();
+        for dto in &catalogo.modelos {
+            let modelo = ajustes::modelo_de_clave(dto.clave).expect("clave del catálogo");
+            assert_eq!(dto.ram_minima_gb, hardware::ram_minima_gb(modelo));
+            // Y el mismo número tiene que ser el que decide si entra: sin esto,
+            // la interfaz podría decir "no te entra" de un modelo que el
+            // arranque sustituye igual.
+            assert_eq!(
+                dto.ram_minima_gb <= 8.0,
+                hardware::entra_en_memoria(modelo, 8.0, false),
+                "{} no coincide con el criterio de memoria en una máquina de 8 GB",
+                dto.clave
+            );
+        }
         assert_eq!(
-            ram_minima_gb(Modelo::Q4KM),
+            hardware::ram_minima_gb(Modelo::Q4KM),
             0.0,
             "el modelo más chico es el piso: nunca se descarta por memoria"
         );
