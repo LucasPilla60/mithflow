@@ -34,3 +34,21 @@ instalador/
 
 # Backups de base de datos (política global: nunca al repo)
 backups/
+
+# ----------------------------------------------------------------- claves
+# La clave privada minisign que firma las actualizaciones vive FUERA del
+# proyecto (%USERPROFILE%\.mithflow\), justamente para que nunca pueda entrar
+# acá. Esto es la segunda red: si algún día alguien la copia al árbol "un
+# minuto para probar algo", que no la pueda commitear por accidente.
+#
+# Quien tenga esa clave puede firmar un instalador que las tres máquinas van a
+# bajar y ejecutar solas. No hay forma de revocarla.
+*.key
+*.pem
+*.p12
+*.pfx
+*.asc
+*.gpg
+minisign*
+*updater*.key*
+.mithflow/

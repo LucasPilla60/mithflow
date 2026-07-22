@@ -31,6 +31,7 @@
 // deja a propósito: es donde salen los mensajes de diagnóstico.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod actualizador;
 mod ajustes;
 mod atajo;
 mod bandeja;
@@ -67,6 +68,12 @@ fn main() {
             }
         }))
         .plugin(tauri_plugin_store::Builder::default().build())
+        // Actualizaciones contra GitHub Releases. El endpoint y la clave pública
+        // que verifica la firma salen de `plugins.updater` en `tauri.conf.json`.
+        // No se le da ningún permiso al JavaScript (ver `capabilities/`): todo
+        // pasa por los comandos de `actualizador`, que es donde están las
+        // guardas de "no interrumpir un dictado" y "no bajar de versión".
+        .plugin(tauri_plugin_updater::Builder::new().build())
         // El argumento se agrega SÓLO al acceso directo del arranque de
         // Windows: arrancar con la sesión no puede tirarte una ventana encima,
         // pero abrir la app a mano sí tiene que mostrarla.
@@ -89,6 +96,9 @@ fn main() {
             comandos::descargar_modelo,
             desinstalar::resumen_desinstalacion,
             desinstalar::desinstalar,
+            actualizador::leer_actualizacion,
+            actualizador::buscar_actualizacion,
+            actualizador::instalar_actualizacion,
         ])
         .setup(preparar)
         // Cerrar la ventana esconde, no termina: esta app vive en la bandeja y
@@ -155,6 +165,9 @@ fn preparar(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     handle.manage(Arc::clone(&espejo));
     handle.manage(AlDirector::nuevo(al_director.clone()));
     handle.manage(sonidos.clone());
+    // El espejo de la última consulta de actualizaciones. Se registra ANTES de
+    // programar la consulta, que es quien lo escribe.
+    handle.manage(Arc::new(actualizador::UltimaConsulta::nueva()));
 
     // Si acá no se puede arrancar el motor, la aplicación sigue viva con un
     // canal muerto: el director publica `SinModelo` o `Error` según el caso, y
@@ -164,6 +177,10 @@ fn preparar(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         Err(fallo) => motor_ausente(&al_director, fallo),
     };
     atajo::lanzar(al_director.clone());
+    // Última de todo y en un hilo que primero duerme: si esta línea no existiera
+    // la aplicación funcionaría igual, que es exactamente la relación que tiene
+    // que tener el actualizador con el dictado.
+    actualizador::consultar_al_arrancar(&handle);
     director::lanzar(
         handle.clone(),
         al_director,

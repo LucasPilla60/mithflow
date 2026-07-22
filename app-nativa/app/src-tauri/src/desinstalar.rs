@@ -177,6 +177,17 @@ fn plan_de_borrado(app: &AppHandle) -> Result<PlanDeBorrado, String> {
 
 /* ---------------------------------------------------- el desinstalador */
 
+/// ¿Esa carpeta es una instalación de MithFlow y no una copia de desarrollo?
+///
+/// La señal es el `uninstall.exe` que NSIS deja al lado del ejecutable. Vive acá
+/// —y no repetida en cada módulo que la necesite— porque "qué es una
+/// instalación" tiene que ser una sola definición: el actualizador la usa para
+/// decidir si tiene sentido reemplazar algo (ver `actualizador::esta_instalada`),
+/// y si las dos respuestas pudieran diferir, una de las dos estaría mintiendo.
+pub fn es_una_instalacion(carpeta_del_ejecutable: &Path) -> bool {
+    carpeta_del_ejecutable.join(DESINSTALADOR).is_file()
+}
+
 /// Dónde tendría que estar el desinstalador: al lado del ejecutable, que es
 /// donde lo deja el instalador NSIS.
 ///
@@ -601,6 +612,25 @@ mod tests {
             "{} no es el directorio de modelos",
             de_modelos.display()
         );
+    }
+
+    /// Una carpeta es una instalación **sólo** si tiene el desinstalador al
+    /// lado. Es la misma pregunta que se hace el actualizador antes de bajar
+    /// nada, así que las dos respuestas salen de acá.
+    #[test]
+    fn una_carpeta_es_instalacion_solo_si_tiene_el_desinstalador() {
+        let dir = carpeta_temporal("es_instalacion");
+        assert!(
+            !es_una_instalacion(&dir),
+            "una carpeta pelada no es una instalación"
+        );
+        escribir(&dir.join("mithflow.exe"), 10);
+        assert!(
+            !es_una_instalacion(&dir),
+            "el ejecutable solo tampoco: eso es target/release/"
+        );
+        escribir(&dir.join(DESINSTALADOR), 3);
+        assert!(es_una_instalacion(&dir));
     }
 
     /// La red que atrapa una ruta rota antes del `remove_dir_all`.

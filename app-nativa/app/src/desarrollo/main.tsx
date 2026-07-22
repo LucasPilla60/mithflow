@@ -3,7 +3,8 @@
  *
  * La usa `mock.html`, que Vite sirve en `npm run dev` y NO compila en
  * `npm run build` (el `input` por defecto de Rollup es sólo `index.html`).
- * Escenarios: `mock.html?escenario=normal|primer-arranque|grabando|sin-instalar`.
+ * Escenarios:
+ * `mock.html?escenario=normal|primer-arranque|grabando|sin-instalar|actualizacion`.
  */
 import React from "react";
 import ReactDOM from "react-dom/client";
@@ -15,6 +16,7 @@ const ESCENARIOS: Escenario[] = [
   "primer-arranque",
   "grabando",
   "sin-instalar",
+  "actualizacion",
 ];
 
 const pedido = new URLSearchParams(window.location.search).get("escenario");

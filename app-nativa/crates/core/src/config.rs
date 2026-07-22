@@ -12,7 +12,7 @@ pub const LANGUAGE: &str = "es";
 /// El vocabulario del usuario **se suma** al de fábrica, no lo reemplaza.
 ///
 /// Es la diferencia entre un ajuste que ayuda y uno que rompe: quien escriba
-/// "Jaé, MithCore" en Ajustes quiere que el modelo aprenda esos dos términos,
+/// "MithCore, pgTAP" en Ajustes quiere que el modelo aprenda esos dos términos,
 /// no perder "MithData", "CRM" y el resto de la lista que ya venía funcionando.
 /// Con la caja vacía —el caso de todo usuario que nunca la toque— devuelve
 /// exactamente [`INITIAL_PROMPT`], así que el comportamiento por defecto no
@@ -96,10 +96,10 @@ mod tests {
     /// Y con vocabulario propio se SUMA: los términos de fábrica siguen ahí.
     #[test]
     fn el_vocabulario_propio_se_suma_al_de_fabrica() {
-        let prompt = prompt_con_vocabulario("MithCore, Jaé, pgTAP");
+        let prompt = prompt_con_vocabulario("MithCore, pgTAP");
         assert!(prompt.starts_with(INITIAL_PROMPT), "se perdió el prompt base");
         assert!(prompt.contains("MithData"), "se perdió el vocabulario de fábrica");
         assert!(prompt.contains("MithCore"));
-        assert!(prompt.contains("Jaé"));
+        assert!(prompt.contains("pgTAP"));
     }
 }

@@ -181,6 +181,31 @@ export interface Aviso {
   nivel: "info" | "error";
 }
 
+/**
+ * Las claves de `actualizador::EstadoActualizacion`.
+ *
+ * `"no-instalada"` es su propia clave y no un `"sin-red"` con otro texto: es el
+ * caso de la copia de desarrollo, no un fallo, y confundirlos mandaría a buscar
+ * un problema de conexión que no existe.
+ */
+export type ClaveActualizacion =
+  | "sin-consultar"
+  | "al-dia"
+  | "disponible"
+  | "sin-red"
+  | "no-instalada";
+
+/** Espejo de `actualizador::EstadoActualizacion`. */
+export interface EstadoActualizacion {
+  clave: ClaveActualizacion;
+  instalada: string;
+  /** La versión que se instalaría. Sólo con `"disponible"`. */
+  disponible: string | null;
+  notas: string | null;
+  /** Ya armado en Rust: la interfaz no repite qué significa cada clave. */
+  mensaje: string;
+}
+
 /** Valor de `Ajustes.modelo` que significa "el que diga el perfilado". */
 export const MODELO_AUTOMATICO = "auto";
 
@@ -235,6 +260,24 @@ export const leerResumenDesinstalacion = () =>
 export const desinstalar = (conservar: boolean) =>
   invoke<void>("desinstalar", { conservar });
 
+/** El presente, sin salir a la red: lo que dejó la consulta del arranque. */
+export const leerActualizacion = () =>
+  invoke<EstadoActualizacion>("leer_actualizacion");
+
+/** Sale a la red ahora mismo. Es el botón de Ajustes. */
+export const buscarActualizacion = () =>
+  invoke<EstadoActualizacion>("buscar_actualizacion");
+
+/**
+ * Baja, verifica la firma, instala y reinicia.
+ *
+ * En el camino feliz **esta promesa no resuelve**: el backend lanza el
+ * instalador y termina el proceso, así que la ventana desaparece. Sólo un
+ * rechazo significa algo, y significa que no se instaló nada.
+ */
+export const instalarActualizacion = () =>
+  invoke<void>("instalar_actualizacion");
+
 /* ---------------------------------------------------------------- eventos */
 
 export const alCambiarEstado = (f: (e: EstadoDto) => void): Promise<UnlistenFn> =>
@@ -253,6 +296,11 @@ export const alProgresoDescarga = (
 
 export const alPerfiladoListo = (f: (p: PerfilDto) => void): Promise<UnlistenFn> =>
   listen<PerfilDto>("perfilado-listo", (ev) => f(ev.payload));
+
+export const alActualizacionDisponible = (
+  f: (e: EstadoActualizacion) => void,
+): Promise<UnlistenFn> =>
+  listen<EstadoActualizacion>("actualizacion-disponible", (ev) => f(ev.payload));
 
 /**
  * Cancela un conjunto de suscripciones. `listen` devuelve una promesa, así que

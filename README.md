@@ -11,7 +11,7 @@ Incluye un **dashboard** con analíticas de uso: cuánto dictaste, tu velocidad 
 
 | | **Python** (esta carpeta) | **Nativa** (`app-nativa/`) |
 |---|---|---|
-| Estado | **la que uso todos los días** | primera versión empaquetada (1.0.0) |
+| Estado | **la que uso todos los días** | empaquetada y con actualizaciones automáticas (1.1.0) |
 | Atajo | **F8** | **F9** |
 | Motor | faster-whisper + CUDA (necesita NVIDIA para ir rápido) | whisper.cpp + Vulkan (NVIDIA, AMD o Intel) |
 | Instalación | Python 3.10+ y `instalar.ps1` | un instalador `.exe`, sin Python |
@@ -48,9 +48,11 @@ Ajustes.
 
 ### Instalación
 
-El instalador se llama **`MithFlow_1.0.0_x64-setup.exe`**. No está en el repo
-(pesa de más): lo genera `npm run tauri build` desde `app-nativa/app/` y queda en
-`app-nativa/target/release/bundle/nsis/`.
+El instalador se llama **`MithFlow_1.1.0_x64-setup.exe`**. No está en el repo
+(pesa de más): lo genera `Generar-Instalador.ps1` y queda en `instalador\`.
+
+Esto es sólo para la **primera** instalación de cada máquina: a partir de ahí
+MithFlow se actualiza solo (ver «Actualizaciones automáticas» más abajo).
 
 1. Doble clic en el instalador.
 2. ⚠️ **Windows va a mostrar "Windows protegió su PC".** Es esperable y no
@@ -90,6 +92,169 @@ son 12 MB aunque en disco queden 99.
 - Si Windows no tiene **WebView2** (Windows 11 ya lo trae), el instalador lo
   descarga solo.
 - Requiere Windows 10/11 de 64 bits.
+
+---
+
+## 🔄 Actualizaciones automáticas (app nativa)
+
+> **Leelo dentro de seis meses sin acordarte de nada: está escrito para eso.**
+
+### Qué ve el usuario
+
+Al abrir MithFlow, quince segundos después, la app consulta **una sola vez** si
+salió una versión nueva. Si hay, aparece una **barrita ámbar** debajo del
+encabezado: *"Hay una versión nueva: v1.2.0 (tenés la v1.1.0)"*, con
+**Actualizar y reiniciar** y una **×** para descartarla. No es un modal, no
+bloquea nada y no vuelve a consultar mientras usás la app.
+
+Al aceptar: baja el instalador, **verifica la firma**, lo aplica y MithFlow se
+cierra y vuelve a abrirse solo, ya actualizado.
+
+En **Ajustes → Actualizaciones** están la versión instalada y el botón **Buscar
+actualizaciones**, que consulta en el momento.
+
+Tres cosas que **no** pasan nunca:
+
+- **Sin internet no molesta.** La consulta falla, se anota y la app funciona
+  igual. Nada del actualizador puede impedir dictar.
+- **No interrumpe un dictado.** Grabando o transcribiendo no avisa y no
+  instala; si la descarga termina justo cuando arrancaste a dictar, se frena
+  antes de instalar.
+- **No baja de versión.** Si el manifiesto anuncia una versión que no es más
+  nueva que la instalada, no se ofrece nada.
+
+Si corrés MithFlow desde una copia de desarrollo (`target\release\`) en vez de
+la instalación, Ajustes lo dice con todas las letras: no hay nada que
+actualizar.
+
+### ⚠️ Qué reemplazar cuando crees el repositorio en GitHub
+
+Un solo lugar, y el script no te deja compilar hasta que lo hagas:
+
+**Archivo:** `app-nativa/app/src-tauri/tauri.conf.json`
+**Dónde:** `plugins` → `updater` → `endpoints`
+
+```json
+"endpoints": [
+  "https://github.com/REEMPLAZAR-USUARIO/REEMPLAZAR-REPO/releases/latest/download/latest.json"
+]
+```
+
+Cambiá `REEMPLAZAR-USUARIO/REEMPLAZAR-REPO` por lo tuyo (por ejemplo
+`mithdata/mithflow`) y listo. `Generar-Instalador.ps1` lee esa URL y deriva de
+ahí la de descarga del instalador, así que **no hay un segundo lugar** donde el
+nombre del repositorio pueda quedar mal.
+
+Esa URL queda grabada dentro del `.exe`: después de cambiarla hay que volver a
+compilar para que las instalaciones nuevas sepan a dónde consultar. El
+repositorio puede ser público o privado, pero si es privado las releases no son
+descargables sin credenciales y el actualizador no va a poder bajar nada.
+
+### Publicar una versión nueva
+
+**Un comando:**
+
+```powershell
+.\Generar-Instalador.ps1 -Version 1.2.0 -Notas "Qué cambió en esta versión."
+```
+
+(Clic derecho → *Ejecutar con PowerShell* también sirve, pero ahí no se puede
+pasar la versión: recompila la que ya está.)
+
+El script hace todo solo:
+
+1. Corta si el repositorio de GitHub todavía dice `REEMPLAZAR`.
+2. Escribe la versión en los **tres** archivos que la llevan
+   (`app-nativa/Cargo.toml`, `app-nativa/app/package.json`,
+   `app-nativa/app/src-tauri/tauri.conf.json`) y **los relee para verificar que
+   quedaron iguales**. Si se desincronizan, el actualizador se rompe de formas
+   confusas.
+3. Compila.
+4. Firma el instalador con la clave privada minisign.
+5. Deja en `instalador\` los **dos archivos que hay que subir**.
+
+**Después, a mano en GitHub** (esto no lo hace el script):
+
+1. *Releases* → *Draft a new release*.
+2. La etiqueta tiene que ser **exactamente `v` + la versión**: para la 1.2.0, la
+   etiqueta es `v1.2.0`. Si no, la URL del manifiesto apunta a la nada.
+3. Adjuntá los **dos** archivos de `instalador\`, con esos nombres:
+   - `MithFlow_1.2.0_x64-setup.exe`
+   - `latest.json`
+4. **Publicala**, no la dejes en borrador: `/releases/latest/` no ve los
+   borradores y la consulta devolvería 404.
+
+Las instalaciones existentes ven la actualización la próxima vez que abran
+MithFlow.
+
+### 🔑 La clave privada: dónde está y qué pasa si se pierde
+
+```
+%USERPROFILE%\.mithflow\mithflow-updater.key       ← la privada (SECRETA)
+%USERPROFILE%\.mithflow\mithflow-updater.key.pub   ← la pública (copiada ya en tauri.conf.json)
+```
+
+En esta máquina: `C:\Users\lucas\.mithflow\`.
+
+**Está fuera del proyecto a propósito.** Adentro, cualquier `git add -A`
+distraído la publicaría para siempre en un repo público, y quien la tenga puede
+firmar un instalador que las tres máquinas van a bajar y ejecutar solas, sin
+preguntar nada. No hay forma de revocarla. El `.gitignore` tiene además
+`*.key`, `*.pem` y compañía como segunda red, por si alguna vez la copiás al
+árbol "un minuto para probar algo".
+
+**La clave pública sí es pública**: está en `tauri.conf.json` y tiene que estar
+ahí, es la que verifica la firma. No es un secreto.
+
+#### Si se pierde la clave privada
+
+**Nadie puede volver a actualizar las instalaciones que ya están afuera.**
+
+Se puede generar una clave nueva y poner la pública nueva en `tauri.conf.json`,
+pero las copias ya instaladas siguen buscando la firma de la clave vieja y
+**van a rechazar todo lo que se publique**. La única salida es ir a las tres
+máquinas y **reinstalar a mano** con el instalador nuevo.
+
+Por eso: **respaldala.** Copiá esos dos archivos a donde guardes lo importante
+(gestor de contraseñas, disco externo, lo que uses). Son 500 bytes.
+
+```powershell
+# Generar el par de nuevo (sólo si la perdiste y ya asumiste el costo de arriba)
+cd app-nativa\app
+npm run tauri --silent -- signer generate --ci --password= -w "$env:USERPROFILE\.mithflow\mithflow-updater.key"
+```
+
+Después hay que copiar el contenido de `mithflow-updater.key.pub` al campo
+`pubkey` de `tauri.conf.json`.
+
+#### Sobre la contraseña de la clave
+
+La clave se generó **sin contraseña**, para que publicar sea un comando y no un
+comando más una contraseña que nadie va a recordar. El costo es real: quien
+consiga el archivo puede firmar actualizaciones sin nada más. Como el archivo
+vive en el perfil de usuario de esta máquina y nunca sale de ahí, el riesgo es
+"alguien con acceso a esta computadora", que ya podría hacer cosas peores.
+
+Si preferís ponerle contraseña, generá el par con `--password "loquesea"` en vez
+de `--password=`, y en `Generar-Instalador.ps1` cambiá el `--password=` del paso
+de firma por `--password "loquesea"`. **No la escribas en el script**: se
+commitea junto con él y no habrías ganado nada.
+
+#### Esto NO es la firma de código de Windows
+
+Son dos cosas distintas:
+
+| | Firma minisign (esto) | Firma de código (SmartScreen) |
+|---|---|---|
+| Para qué | que la app confíe en la actualización | que Windows confíe en el instalador |
+| Cuesta | nada | cientos de dólares por año |
+| Estado | **hecha** | no la tenemos |
+
+Al instalar a mano se va a seguir viendo "Windows protegió su PC" (ese aviso lo
+dispara la marca que el navegador le pone a lo que bajás). Al **actualizar**
+desde la app el instalador no pasa por el navegador, así que lo esperable es que
+no aparezca — pero no está verificado en las tres máquinas, así que si en alguna
+sale, es eso y no un problema: **Más información → Ejecutar de todas formas**.
 
 ---
 
@@ -250,7 +415,9 @@ Bajá `vol` en `play_tone()` si los querés aún más discretos (default `0.15`)
 
 **Python:** funcionando end-to-end en Windows 11 + RTX 3080 — dictado, pegado, sonidos, dashboard y analíticas. Probado con micrófono real.
 
-**Nativa:** instalador 1.0.0 generado y verificado en instalación limpia (arranca, carga el motor por Vulkan y queda lista). El dictado real con micrófono todavía no se probó en la versión nativa.
+**Nativa:** instalador 1.1.0 generado y firmado, con actualizaciones automáticas contra GitHub Releases. La 1.0.0 se verificó en instalación limpia (arranca, carga el motor por Vulkan y queda lista); el dictado real con micrófono todavía no se probó en la versión nativa.
+
+**Ojo con la 1.0.0:** no tiene actualizador, así que las máquinas que la tengan instalada **no** van a recibir la 1.1.0 solas. Hay que instalarla a mano una vez en cada una; de ahí en adelante sí se actualizan solas.
 
 ## 🗺️ Roadmap
 

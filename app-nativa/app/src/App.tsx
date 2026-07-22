@@ -25,6 +25,7 @@ import {
   type Catalogo,
   type EstadoDto,
 } from "./api";
+import { useActualizacion } from "./actualizacion";
 import Dashboard from "./vistas/Dashboard";
 import VistaAjustes from "./vistas/Ajustes";
 import Asistente from "./vistas/Asistente";
@@ -86,6 +87,8 @@ export default function App() {
       cancelarTodas(suscripciones);
     };
   }, [avisar]);
+
+  const actualizacion = useActualizacion(avisar);
 
   const alternarPausa = () => {
     if (!estado) return;
@@ -171,6 +174,39 @@ export default function App() {
         )}
       </header>
 
+      {/* Una barra fina y descartable, nunca un modal: enterarse de que hay una
+          versión nueva no puede tapar el dashboard ni frenar lo que el usuario
+          vino a hacer. El backend ya se ocupa de no mandarla en medio de un
+          dictado (ver `actualizador::publicar`). */}
+      {actualizacion.hayQueAvisar && actualizacion.estado && (
+        <div className="aviso-version" role="status">
+          <span className="que">
+            Hay una versión nueva:{" "}
+            <strong>v{actualizacion.estado.disponible}</strong>{" "}
+            <span className="aclaracion">
+              (tenés la v{actualizacion.estado.instalada})
+            </span>
+          </span>
+          <span className="espacio" />
+          <button
+            type="button"
+            className="boton chico primario"
+            disabled={actualizacion.instalando}
+            onClick={actualizacion.instalar}
+          >
+            {actualizacion.instalando ? "Actualizando…" : "Actualizar y reiniciar"}
+          </button>
+          <button
+            type="button"
+            className="boton plano chico"
+            aria-label="Descartar el aviso de versión nueva"
+            onClick={actualizacion.descartarAviso}
+          >
+            ×
+          </button>
+        </div>
+      )}
+
       <main className="contenido">
         {fallo && <p className="error-vista">No pude hablar con el backend: {fallo}</p>}
 
@@ -197,7 +233,11 @@ export default function App() {
         ) : vista === "dashboard" ? (
           <Dashboard />
         ) : (
-          <VistaAjustes alCambiarCatalogo={cambiarCatalogo} avisar={avisar} />
+          <VistaAjustes
+            alCambiarCatalogo={cambiarCatalogo}
+            avisar={avisar}
+            actualizacion={actualizacion}
+          />
         )}
       </main>
 

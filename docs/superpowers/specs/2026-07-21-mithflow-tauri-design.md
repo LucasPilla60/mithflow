@@ -16,7 +16,7 @@ Se instalará en **tres máquinas**:
 | Máquina | Hardware | Estado |
 |---|---|---|
 | Escritorio | RTX 3080 10 GB, 32 GB RAM, Python 3.11.9 | Caracterizada |
-| Notebook de Jaé | **Sin caracterizar** | Precondición 16.1 |
+| Notebook secundaria | **Sin caracterizar** | Precondición 16.1 |
 | Notebook personal | **Sin caracterizar** | Precondición 16.1 |
 
 **Requisito central:** un único instalador que se adapte solo a cada máquina, sin recompilar ni configurar a mano.

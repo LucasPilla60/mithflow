@@ -307,7 +307,7 @@ sleep de 120 ms, y reducirlo es empírico: no hay señal del sistema que diga
 
 Datos aportados por el usuario el 21/7/2026.
 
-| | Escritorio | MSI Katana | Notebook de Jaé |
+| | Escritorio | MSI Katana | Notebook secundaria |
 |---|---|---|---|
 | CPU | Ryzen 9 3900X | i7 12ª gen | Ryzen 3 o i3 (sin confirmar) |
 | RAM | **64 GB** | 32 GB | ~8 GB (sin confirmar) |
@@ -324,7 +324,7 @@ Una RTX 3050 Ti con 4 GB de VRAM corre Vulkan sin problema. Con el modelo `F16`
 presión de memoria, `Q5_K_M` (590 MB) es la alternativa. Se espera rendimiento
 holgadamente dentro del criterio 3, probablemente mejor que el criterio 2.
 
-**Notebook de Jaé** — es la máquina restrictiva y la única con incógnitas reales.
+**Notebook secundaria** — es la máquina restrictiva y la única con incógnitas reales.
 Con gráficos integrados AMD, Vulkan debería funcionar: en integradas equivalentes
 (Radeon 680M) se midieron 3-4x tiempo real, unas 12 veces más rápido que CPU
 pura. Si la integrada no soporta las operaciones de cómputo necesarias, el
@@ -333,7 +333,7 @@ fallback a CPU ya está contemplado. Con ~8 GB de RAM el modelo indicado es
 
 ### Esta incertidumbre valida el diseño de la sección 5 del spec
 
-La notebook de Jaé es exactamente el caso que motivó **elegir el modelo por
+La notebook secundaria es exactamente el caso que motivó **elegir el modelo por
 benchmark medido y no por umbrales de VRAM**: una integrada AMD reporta ~128 MB
 de "VRAM dedicada" por DXGI, así que una matriz por umbrales la mandaría a la
 rama "sin GPU utilizable" aunque Vulkan funcione bien. El perfilado por medición
@@ -416,7 +416,7 @@ dos respuestas y daría un archivo corrupto de 1,5 GB.
 
 ### Pendiente cuando haya acceso físico
 
-Confirmar en la notebook de Jaé: CPU exacto, RAM real, modelo de la integrada, y
+Confirmar en la notebook secundaria: CPU exacto, RAM real, modelo de la integrada, y
 si `vulkaninfo --summary` lista algún dispositivo. **No bloquea el desarrollo**:
 el Plan 2 se puede escribir con lo que hay, porque la selección es automática.
 
@@ -1512,8 +1512,8 @@ Medido sobre la instalación real de esta máquina el 22/7/2026:
 Desinstalar por el camino normal deja las dos carpetas huérfanas. Los 2 GB son
 disco que nadie va a volver a encontrar. El historial es peor: es **texto plano
 con todo lo que el usuario dictó**, y esta app se instala también en la notebook
-de su pareja. Un dato personal que sobrevive a la desinstalación del programa que
-lo escribió es un defecto, no una comodidad.
+secundaria, que usa otra persona. Un dato personal que sobrevive a la
+desinstalación del programa que lo escribió es un defecto, no una comodidad.
 
 ### El orden: verificar, borrar, lanzar
 
@@ -1670,3 +1670,132 @@ Al confirmar: se borra lo elegido, se saca el arranque con Windows, se lanza
   usuario y sus 2 GB de modelos siguen intactos.
 - Instalador NSIS regenerado (12.753.318 bytes) y copiado a
   `D:\MithFlow\instalador\`.
+
+---
+
+## Plan 8 — actualizaciones automáticas (22/7/2026)
+
+El pedido: *"cada vez que le metamos un cambio, que aparezca de alguna manera que
+hay una nueva versión, para que el sistema se cierre y se recargue con lo
+último"*. Se implementó con `tauri-plugin-updater` contra GitHub Releases.
+
+### La firma es el módulo entero
+
+Este plan agrega la única función de toda la aplicación que **baja un ejecutable
+de internet y lo corre**. Sin verificación, eso es una puerta trasera con forma
+de comodidad: quien pueda contestar en lugar del endpoint —un DNS envenenado, un
+proxy, una release ajena— consigue ejecución de código en las tres máquinas.
+
+Lo que lo cierra es la firma **minisign**, que el actualizador de Tauri exige:
+`tauri.conf.json` lleva la clave pública, el `latest.json` lleva la firma del
+instalador, y `Update::download` la verifica **antes** de devolver los bytes. Se
+comprobó de las dos formas: el `.exe` firmado verifica contra la clave pública
+del `tauri.conf.json`, y con **un solo byte cambiado** deja de verificar.
+
+La clave privada vive en `%USERPROFILE%\.mithflow\`, **fuera del árbol del
+proyecto**, porque el repositorio va a ser público y adentro un `git add -A`
+distraído la publicaría para siempre. El `.gitignore` suma `*.key`, `*.pem` y
+compañía como segunda red. Se generó sin contraseña; el costo de esa decisión
+está documentado en el README.
+
+Esto **no** es la firma de código de Windows: SmartScreen sigue apareciendo al
+instalar a mano. Son cosas distintas y sólo la segunda cuesta dinero.
+
+### Las decisiones
+
+- **Comparador de versiones propio, además del del plugin** (`es_mas_nueva`). El
+  plugin decide con `semver` y con lo que diga el manifiesto, y ese manifiesto es
+  un archivo que se sube a mano a una release. Uno viejo, o el de otra release,
+  haría que la app se "actualice" hacia atrás y reemplace la instalación buena
+  por una vieja. La función es además el único pedazo de esto que se puede probar
+  sin red, y ahí está el caso que una comparación de cadenas erraría:
+  `"1.10.0" < "1.9.0"` alfabéticamente.
+- **Espejo (`UltimaConsulta`) y comando espejo (`leer_actualizacion`)**, por la
+  misma regla que gobierna `comandos.rs`: los eventos cuentan novedades y sólo
+  llegan a quien esté escuchando. La consulta corre a los quince segundos de
+  arrancar, cuando lo más probable es que la app esté en la bandeja y no haya
+  ninguna ventana abierta. Sin el espejo, el aviso se perdería hasta el próximo
+  arranque.
+- **Quince segundos de espera antes de consultar.** Al abrir, el motor está
+  cargando el modelo y compilando shaders —entre veinte segundos y un minuto—, y
+  ése es el trabajo que decide cuándo se puede dictar. El actualizador es lo
+  último que puede pelearle la máquina.
+- **`consultar` nunca devuelve `Err`.** No hay forma de fallar en la que la
+  respuesta correcta no sea "seguí usando la app". Sin internet, con GitHub
+  caído, con el endpoint sin configurar o con un `latest.json` ilegible, el
+  resultado es el mismo `sin-red` y un renglón en la salida de diagnóstico.
+- **La guarda del dictado se verifica DOS veces al instalar**: al empezar y otra
+  vez **después de bajar el paquete**, porque bajar 12 MB tarda y arrancar a
+  dictar en el medio es lo más normal del mundo. El final del camino es matar el
+  proceso para que corra el instalador; un dictado perdido a la mitad no vuelve.
+- **La consulta forzada de Ajustes sí corre mientras se dicta.** Es una petición
+  HTTP que el usuario pidió: no interrumpe nada y no toca el audio. Lo que sigue
+  prohibido con audio en vuelo es *instalar*.
+- **Ningún permiso de plugin hacia el JavaScript.** Las `capabilities` siguen
+  como estaban: todo pasa por los comandos de `actualizador`, que es donde viven
+  las guardas. El frontend no puede saltearlas.
+- **El aviso es una barra fina y descartable, no un modal.** Descartar dura lo
+  que dura la ventana y no se guarda en disco: una versión nueva ignorada para
+  siempre es peor que un aviso que reaparece al abrir de nuevo.
+- **`instalar_actualizacion` vuelve a consultar en vez de guardar el `Update`.**
+  Entre el aviso del arranque y el clic pueden haber pasado horas. Cuesta una
+  petición y evita un estado mutable compartido más.
+
+### Qué NO se hizo
+
+- **Consultar periódicamente.** El pedido era enterarse, no vigilar. Una consulta
+  por arranque más el botón de Ajustes cubre el caso sin ruido y sin tráfico.
+- **Reintentar el aviso si estaba dictando cuando llegó la respuesta.** El
+  resultado igual queda en el espejo, así que aparece al abrir la ventana o al
+  apretar el botón. Un temporizador que reintenta es un aviso que puede caer en
+  medio del dictado siguiente.
+- **`createUpdaterArtifacts` del bundler.** Firmar durante el build exige la
+  clave por variable de entorno, y Windows PowerShell 5.1 **no puede pasar una
+  variable de entorno vacía** a un proceso hijo (asignarle la cadena vacía la
+  borra), así que el CLI se quedaría esperando la contraseña por teclado para
+  siempre. El script firma después, con `signer sign --password=`, que como
+  argumento sí viaja vacía.
+- **Firma de código de Windows.** Cuesta cientos de dólares por año y no es lo
+  que hace segura la actualización.
+
+### La trampa del `Get-Content` en el script
+
+`Generar-Instalador.ps1` reescribe la versión en `Cargo.toml`, `package.json` y
+`tauri.conf.json`. La primera versión leía con `Get-Content -Raw` y escribía
+UTF-8: en Windows PowerShell 5.1 un archivo **sin BOM se lee como ANSI**, así que
+cada acento entraba como dos caracteres y salía re-codificado. Una publicación
+convertía `propósito` en `propÃ³sito`, y a la tercera los comentarios de
+`Cargo.toml` eran ilegibles. Ahora se lee con
+`[System.IO.File]::ReadAllText(..., UTF8)`. El mismo problema, al revés, obliga a
+que **el propio `.ps1` se guarde con BOM**: sin él, la raya larga («—») se
+decodifica como tres caracteres, uno de los cuales es una comilla tipográfica que
+PowerShell acepta como delimitador de cadena, y el script deja de parsear con
+errores en líneas que no tienen nada malo.
+
+### Verificación
+
+- `cargo test --workspace`: **102 núcleo + 133 app** (eran 102 y 116). Los 17
+  nuevos cubren: que 1.10.0 es más nueva que 1.9.0; que sube en cualquiera de las
+  tres partes; que la misma versión no es una actualización; que **nunca** se
+  ofrece una anterior; que una versión ilegible no actualiza; la `v` de git y el
+  sufijo de pre-release; que la versión compilada es legible; que grabando o
+  transcribiendo no se avisa ni se instala y que ningún otro estado lo impide;
+  que sólo `disponible` trae una versión; que el fallo de red dice que la app
+  sigue funcionando y no muestra la URL; que la copia de desarrollo se explica
+  aparte; que las cinco claves son distintas; que el espejo arranca sin consultar
+  y guarda lo último; **que un endpoint que no contesta termina en `sin-red`** y
+  que sólo una versión que sube se ofrece; y que una carpeta es una instalación
+  sólo si tiene el desinstalador al lado.
+- `cargo clippy --workspace --all-targets -- -D warnings`: limpio.
+- `npm run build`: sin errores de TypeScript.
+- **Firma verificada de verdad**: el `.exe` de la 1.1.0 verifica contra la clave
+  pública de `tauri.conf.json`, y con un byte alterado no verifica.
+- El script corrido de punta a punta: sincroniza las tres versiones, compila,
+  firma y deja el `.exe` y el `latest.json`. También se verificó que **se niega a
+  compilar** mientras el endpoint diga `REEMPLAZAR`.
+- Capturas: `app/capturas/21-actualizacion-aviso.png` (la barra),
+  `22-actualizacion-ajustes.png` (la sección de Ajustes con versión nueva) y
+  `23-actualizacion-copia-de-desarrollo.png` (el caso sin instalación).
+- **No se arrancó la app** ni se creó nada en GitHub. Las capturas salen del
+  backend simulado en el navegador (`mock.html?escenario=actualizacion`), que se
+  extendió con los tres comandos nuevos.

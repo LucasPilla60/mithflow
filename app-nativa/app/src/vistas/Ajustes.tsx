@@ -30,6 +30,7 @@ import {
   type ProgresoDescarga,
   type ResumenDesinstalacion,
 } from "../api";
+import type { ControlActualizacion } from "../actualizacion";
 import { Campo, Interruptor, Progreso, Segmentado } from "../componentes/Basicos";
 import {
   bytesEnMegas,
@@ -51,9 +52,18 @@ interface Props {
   /** Para avisarle al resto de la app que el catálogo cambió (un modelo nuevo). */
   alCambiarCatalogo: (catalogo: Catalogo) => void;
   avisar: (texto: string, nivel: "info" | "error") => void;
+  /**
+   * Baja de `App`, no se consulta acá: el aviso del encabezado y esta sección
+   * tienen que decir lo mismo, y buscar desde acá tiene que apagar aquél.
+   */
+  actualizacion: ControlActualizacion;
 }
 
-export default function VistaAjustes({ alCambiarCatalogo, avisar }: Props) {
+export default function VistaAjustes({
+  alCambiarCatalogo,
+  avisar,
+  actualizacion,
+}: Props) {
   const [catalogo, setCatalogo] = useState<Catalogo | null>(null);
   const [guardados, setGuardados] = useState<Ajustes | null>(null);
   const [borrador, setBorrador] = useState<Ajustes | null>(null);
@@ -305,7 +315,7 @@ export default function VistaAjustes({ alCambiarCatalogo, avisar }: Props) {
             <textarea
               value={borrador.vocabulario}
               maxLength={MAX_VOCABULARIO}
-              placeholder="MithData, MithFlow, Jaé, Puerto Madryn…"
+              placeholder="MithData, MithFlow, Puerto Madryn…"
               onChange={(e) => cambiar("vocabulario", e.currentTarget.value)}
             />
             <div className="progreso-info">
@@ -491,6 +501,74 @@ export default function VistaAjustes({ alCambiarCatalogo, avisar }: Props) {
             etiqueta={borrador.arranque_con_windows ? "Sí" : "No"}
           />
         </Campo>
+      </section>
+
+      <section className="seccion">
+        <h2>Actualizaciones</h2>
+        <p className="porque">
+          MithFlow se fija una sola vez al abrir si salió una versión nueva, y si
+          hay te avisa con una barrita arriba que podés descartar. No vuelve a
+          consultar mientras lo usás. Si no tenés internet, la consulta falla en
+          silencio y no cambia nada: el dictado no depende de esto.
+        </p>
+
+        <Campo
+          rotulo="Versión instalada"
+          ayuda="El paquete que se baja viene firmado; si la firma no verifica, no se ejecuta nada."
+        >
+          <span className="cifra">v{catalogo.version}</span>
+        </Campo>
+
+        <Campo
+          rotulo="Buscar actualizaciones"
+          ayuda="Sale a consultar ahora mismo, sin esperar al próximo arranque."
+        >
+          <button
+            type="button"
+            className="boton chico"
+            disabled={actualizacion.buscando || actualizacion.instalando}
+            onClick={actualizacion.buscar}
+          >
+            {actualizacion.buscando ? "Buscando…" : "Buscar actualizaciones"}
+          </button>
+          {actualizacion.estado && (
+            <span
+              className={
+                actualizacion.estado.clave === "disponible"
+                  ? "aclaracion ojo"
+                  : "aclaracion"
+              }
+            >
+              {actualizacion.estado.mensaje}
+            </span>
+          )}
+        </Campo>
+
+        {actualizacion.estado?.clave === "disponible" && (
+          <div className="separado">
+            {actualizacion.estado.notas && (
+              <p className="porque">{actualizacion.estado.notas}</p>
+            )}
+            <div className="acciones separado">
+              <button
+                type="button"
+                className="boton primario"
+                disabled={actualizacion.instalando}
+                onClick={actualizacion.instalar}
+              >
+                {actualizacion.instalando
+                  ? "Actualizando…"
+                  : `Actualizar a v${actualizacion.estado.disponible} y reiniciar`}
+              </button>
+              <span className="espacio" />
+            </div>
+            <p className="aclaracion separado">
+              Bajo el instalador, verifico la firma y lo aplico. MithFlow se
+              cierra y vuelve a abrirse solo, ya actualizado. Si estás dictando,
+              no se instala nada hasta que termines.
+            </p>
+          </div>
+        )}
       </section>
 
       <section className="seccion">

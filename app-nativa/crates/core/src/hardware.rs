@@ -521,11 +521,11 @@ mod tests {
         );
     }
 
-    /// El caso que motivó todo el diseño: la notebook de Jaé, con gráficos
+    /// El caso que motivó todo el diseño: la notebook secundaria, con gráficos
     /// integrados AMD y ~8 GB. Vulkan anda, así que el factor es decente, pero
     /// el modelo tiene que vivir en la RAM del sistema.
     #[test]
-    fn la_notebook_de_jae_recibe_el_intermedio() {
+    fn la_notebook_secundaria_recibe_el_intermedio() {
         const RAM: f32 = 8.0;
         // 3-4x tiempo real es lo medido en integradas equivalentes (Radeon 680M).
         assert_eq!(elegir_modelo(3.5, RAM, false), Modelo::Q5KM);
@@ -658,7 +658,7 @@ mod tests {
         assert_eq!(elegir_modelo(43.0, 64.0, true), Modelo::F16);
         // MSI Katana: RTX 3050 Ti (dedicada), 32 GB.
         assert_eq!(elegir_modelo(25.0, 32.0, true), Modelo::F16);
-        // Notebook de Jaé: integrada AMD, ~8 GB.
+        // Notebook secundaria: integrada AMD, ~8 GB.
         assert_eq!(elegir_modelo(3.5, 8.0, false), Modelo::Q5KM);
     }
 

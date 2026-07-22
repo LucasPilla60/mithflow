@@ -391,6 +391,33 @@ button:disabled {
   padding: 0;
 }
 
+/* --------------------------------------------------- aviso de versión nueva */
+
+/* Una franja fina entre el encabezado y el contenido, NO un modal ni una
+   tarjeta flotante: enterarse de que salió una versión nueva no puede tapar el
+   dashboard ni robarle el foco a nada. Comparte el ámbar con `.aclaracion.ojo`,
+   que en esta app ya significa "leé esto antes de seguir", y se distingue del
+   rojo de los errores porque esto no es una falla. */
+.aviso-version {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 8px 18px;
+  font-size: 13px;
+  border-bottom: 1px solid rgba(217, 164, 65, 0.35);
+  background: rgba(217, 164, 65, 0.08);
+}
+
+.aviso-version .que strong {
+  color: var(--ambar);
+  font-weight: 600;
+}
+
+.aviso-version .espacio {
+  flex: 1;
+}
+
 /* ---------------------------------------------------------------- paneles */
 
 .panel {

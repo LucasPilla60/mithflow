@@ -22,6 +22,7 @@ import type {
   Ajustes,
   Catalogo,
   Dictado,
+  EstadoActualizacion,
   EstadoDto,
   Metricas,
   PaginaHistorial,
@@ -38,12 +39,24 @@ export const MARCA = "MITHFLOW_SIMULADO";
  * `sin-instalar` es la app corriendo desde una copia de desarrollo, sin
  * `uninstall.exe` al lado: es lo único que cambia respecto de `normal`, y está
  * porque es el caso que ve quien programa esto al probar la desinstalación.
+ *
+ * `actualizacion` es la app con una versión nueva esperando. Está aparte porque
+ * es un aviso que aparece **una vez y a los quince segundos de arrancar**: sin
+ * un escenario propio no habría forma de mirarlo sin publicar una release.
  */
-export type Escenario = "normal" | "primer-arranque" | "grabando" | "sin-instalar";
+export type Escenario =
+  | "normal"
+  | "primer-arranque"
+  | "grabando"
+  | "sin-instalar"
+  | "actualizacion";
+
+/** La versión que dice tener esta copia. La misma que `tauri.conf.json`. */
+const VERSION = "1.1.0";
 
 const FRASES = [
   "Necesito preparar el informe de cierre para el cliente antes del viernes.",
-  "Recordame llamar a Jaé por el tema del presupuesto de la notebook nueva.",
+  "Recordame pedir el presupuesto de la notebook nueva antes del martes.",
   "El dashboard viejo promediaba la latencia sobre todo el historial y daba un número tres veces peor que el real.",
   "Che, pasame el link de la reunión de mañana a las diez.",
   "Anotá que hay que revisar las políticas de acceso antes de subir esto a producción.",
@@ -205,7 +218,7 @@ const AJUSTES: Ajustes = {
   sonidos: true,
   volumen: 0.15,
   arranque_con_windows: false,
-  vocabulario: "MithData, MithFlow, Jaé, Puerto Madryn",
+  vocabulario: "MithData, MithFlow, Puerto Madryn",
   muletillas: ["eh", "este", "o sea", "digamos", "viste", "nada"],
   modo_limpieza: "rapido",
   limite_grabacion_s: 180,
@@ -298,8 +311,52 @@ export function instalarBackendSimulado(escenario: Escenario) {
     // Las mismas claves que `superpuesta::POSICIONES`, en el mismo orden: la
     // primera es la de fábrica.
     posiciones_indicador: ["abajo-centro", "arriba-centro", "abajo-derecha"],
-    version: "1.0.0",
+    version: VERSION,
   });
+
+  /**
+   * El espejo de `actualizador::UltimaConsulta`, con los textos de
+   * `EstadoActualizacion` copiados tal cual.
+   *
+   * En `sin-instalar` responde lo que responde el backend real desde una copia
+   * de desarrollo, que es el caso que más se ve al programar esto: no hay nada
+   * que actualizar y hay que decirlo, no disfrazarlo de fallo de red.
+   */
+  const HAY_VERSION_NUEVA: EstadoActualizacion = {
+    clave: "disponible",
+    instalada: VERSION,
+    disponible: "1.2.0",
+    notas: "Push-to-talk: mantené la tecla apretada en vez de apretarla dos veces.",
+    mensaje: `Hay una versión nueva: v1.2.0. Tenés la v${VERSION}.`,
+  };
+  const AL_DIA: EstadoActualizacion = {
+    clave: "al-dia",
+    instalada: VERSION,
+    disponible: null,
+    notas: null,
+    mensaje: `Estás en la última versión (v${VERSION}).`,
+  };
+  const NO_INSTALADA: EstadoActualizacion = {
+    clave: "no-instalada",
+    instalada: VERSION,
+    disponible: null,
+    notas: null,
+    mensaje:
+      "Estás usando una copia de desarrollo, no la instalación: no hay nada que actualizar. " +
+      "Las actualizaciones automáticas sólo funcionan sobre lo que dejó el instalador.",
+  };
+
+  const actualizacion = (): EstadoActualizacion => {
+    if (escenario === "sin-instalar") return NO_INSTALADA;
+    return escenario === "actualizacion" ? HAY_VERSION_NUEVA : AL_DIA;
+  };
+
+  // La consulta real corre a los quince segundos; acá se acorta para poder
+  // iterar, pero NO a cero: que el aviso aparezca sobre una ventana ya dibujada
+  // —y no que esté ahí desde el principio— es la mitad de lo que hay que mirar.
+  if (escenario === "actualizacion") {
+    setTimeout(() => void emit("actualizacion-disponible", HAY_VERSION_NUEVA), 1500);
+  }
 
   /**
    * Lo que hace `director::modelo_descargado` cuando una descarga termina bien.
@@ -482,6 +539,25 @@ export function instalarBackendSimulado(escenario: Escenario) {
             texto: conservar
               ? "Desinstalando MithFlow. Los modelos y el historial se quedan en el disco."
               : "Desinstalando MithFlow y borrando los modelos y el historial.",
+            nivel: "info",
+          });
+          return null;
+        }
+        case "leer_actualizacion":
+          return actualizacion();
+        case "buscar_actualizacion":
+          return actualizacion();
+        case "instalar_actualizacion": {
+          // El backend real baja el paquete, verifica la firma, lanza el
+          // instalador y TERMINA EL PROCESO: la ventana desaparece. Acá no hay
+          // proceso que matar, así que se cuenta qué habría pasado.
+          if (estado.estado === "grabando" || estado.estado === "transcribiendo") {
+            throw "Estás grabando. Terminá el dictado y volvé a intentar. No actualicé nada.";
+          }
+          if (escenario === "sin-instalar") throw NO_INSTALADA.mensaje;
+          void emit("aviso", {
+            texto:
+              "Bajando MithFlow 1.2.0. Cuando termine, la aplicación se cierra y vuelve sola.",
             nivel: "info",
           });
           return null;

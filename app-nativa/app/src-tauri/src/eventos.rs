@@ -10,6 +10,7 @@
 //! poder pedir el estado y el historial al montarse (ver `comandos`). Sin esa
 //! mitad, abrir la ventana mostraría una lista vacía.
 
+use crate::actualizador::EstadoActualizacion;
 use crate::estado::EstadoDto;
 use crate::superpuesta::NivelAudio;
 use mithflow_core::history;
@@ -21,6 +22,11 @@ pub const DICTADO_NUEVO: &str = "dictado-nuevo";
 pub const PROGRESO_DESCARGA: &str = "progreso-descarga";
 pub const PERFILADO_LISTO: &str = "perfilado-listo";
 pub const AVISO: &str = "aviso";
+/// Salió una versión nueva. Su comando espejo es
+/// `actualizador::leer_actualizacion`, y en este caso el espejo no es un lujo:
+/// la consulta corre a los quince segundos de arrancar, cuando lo más probable
+/// es que la app esté en la bandeja y no haya una sola ventana escuchando.
+pub const ACTUALIZACION_DISPONIBLE: &str = "actualizacion-disponible";
 /// Cuánto está entrando por el micrófono, unas veinticinco veces por segundo
 /// **y sólo mientras se graba** (ver `superpuesta::hay_que_medir`).
 pub const NIVEL_AUDIO: &str = "nivel-audio";
@@ -106,6 +112,10 @@ pub fn aviso<R: Runtime>(app: &AppHandle<R>, texto: &str, nivel: &'static str) {
 
 pub fn progreso_descarga<R: Runtime>(app: &AppHandle<R>, progreso: ProgresoDescarga) {
     emitir(app, PROGRESO_DESCARGA, progreso);
+}
+
+pub fn actualizacion_disponible<R: Runtime>(app: &AppHandle<R>, estado: EstadoActualizacion) {
+    emitir(app, ACTUALIZACION_DISPONIBLE, estado);
 }
 
 /// El nivel de entrada para la ventanita de grabación.
