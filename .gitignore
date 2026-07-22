@@ -29,5 +29,8 @@ app-nativa/app/src-tauri/transcribe-libs/
 # las decisiones del spike (qué crate, qué backend, qué DLLs empaquetar) y es
 # el insumo de los planes siguientes. No contiene datos sensibles.
 
+# El instalador generado (12 MB). Se regenera con Generar-Instalador.ps1
+instalador/
+
 # Backups de base de datos (política global: nunca al repo)
 backups/
