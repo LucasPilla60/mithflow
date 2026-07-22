@@ -95,6 +95,28 @@ Sin ningún modelo descargado la app **igual arranca**, en estado `SinModelo`
 ("Falta el modelo", en ámbar) y con el motivo a la vista: descargarlo se hace
 desde Ajustes, o sea desde esta misma app.
 
+Y cuando esa descarga termina bien, **el motor arranca solo**: el estado pasa a
+`Cargando` y de ahí a `Listo`, sin cerrar y volver a abrir la aplicación. Es el
+único caso; cambiar de modelo teniendo uno cargado sigue aplicando en el próximo
+arranque, porque reemplazarlo en caliente son 1,5 GB en medio del trabajo. El
+motor arranca por un solo camino (`motor::resolver_y_lanzar`, y `motor::lanzar` es
+privada para que el compilador lo garantice) para que los dos momentos resuelvan
+el `.gguf` con las mismas reglas, y quién decide si hace falta lanzarlo es el
+director, que es el único que sabe si ya hay uno.
+
+Dos cosas se apoyan en eso y conviene saberlas:
+
+- **El archivo se verifica antes de cargarlo.** Un modelo que "ya estaba" en el
+  disco pasa por `models::verificar_instalado` (SHA-256 contra el hash compilado)
+  antes de que la descarga conteste `Ok`, porque ese `Ok` es lo que arranca el
+  motor. El que no verifica se aparta como `.gguf.invalido` y se puede volver a
+  bajar.
+- **El motor mide la máquina cuando puede.** Si el `.gguf` que cargó es el de
+  perfilado, mide sobre su propio `Transcriber` y el asistente reusa ese número
+  en vez de abrir una segunda copia del modelo. En una notebook con gráficos
+  integrados y 8 GB, esa segunda copia es la diferencia entre medir bien y medir
+  una máquina más lenta de la que es.
+
 Ese estado **no es `Error`** a propósito. En el primer arranque no hay nada roto
 —el asistente está bajando el modelo, con su barra de progreso— y una pastilla
 roja ahí arriba diría lo contrario. `Error` queda para lo que sí es una falla: el

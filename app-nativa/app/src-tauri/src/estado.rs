@@ -1,14 +1,28 @@
 //! La máquina de estados de la aplicación y su espejo para la interfaz.
 //!
 //! ```text
-//! Cargando ──(el motor cargó y calentó)──> Listo
-//!    │                                       │  atajo
-//!    │ (no hay .gguf en el disco)            ▼
-//!    ▼                                   Grabando
-//! SinModelo                                  │  atajo (o tope de duración)
-//!                                            ▼
-//!                                      Transcribiendo ──> Listo
+//!         ┌────────────────────────────────┐
+//!         │  (una descarga termina bien)   │
+//!         │                                ▼
+//! SinModelo <──(no hay .gguf)── Cargando ──(el motor cargó y calentó)──> Listo
+//!                                                                          │  atajo
+//!                                                                          ▼
+//!                                                                      Grabando
+//!                                                                          │  atajo
+//!                                                                          │  (o tope)
+//!                                                                          ▼
+//!                                                    Listo <── Transcribiendo
 //! ```
+//!
+//! `SinModelo` **no es una hoja sin salida**: es de donde sale el arranque en
+//! caliente. Bajar el primer modelo desde la propia app lanza el motor y mueve
+//! el estado a `Cargando` sin reiniciar nada (ver
+//! `director::tras_una_descarga`). Es la única transición que sale de ahí, y por
+//! eso es también la que impide que una segunda descarga lance un segundo motor.
+//!
+//! `Error` se alcanza desde cualquiera de los otros —el atajo que otra
+//! aplicación se quedó, un `.gguf` que no carga, el historial sin permisos— y
+//! ninguna descarga lo saca de ahí: bajar un modelo no arregla nada de eso.
 //!
 //! **Un solo hilo escribe el estado** (el director). Todos los demás lo leen
 //! por el espejo [`EstadoCompartido`]. Esa asimetría es deliberada: mientras el

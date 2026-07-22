@@ -110,10 +110,17 @@ export default function App() {
 
   // Con el asistente en pantalla, "Falta el modelo" arriba repite lo que la
   // pantalla entera ya está diciendo ("Bajando el modelo…", con su barra de
-  // progreso), y pausar un dictado que todavía no puede existir no significa
-  // nada. Los dos se guardan SÓLO para ese estado: un error de verdad se sigue
-  // mostrando, porque esconderlo sería mentir en el otro sentido.
+  // progreso). Se guarda SÓLO para ese estado: apenas la descarga arranca el
+  // motor, la pastilla pasa a "Cargando…" y **tiene que verse**, porque el texto
+  // del asistente manda a mirarla ("en cuanto arriba diga «Listo»"). Un error de
+  // verdad también se muestra: esconderlo sería mentir en el otro sentido.
   const ocultarPastilla = mostrarAsistente && clave === "sin-modelo";
+
+  // El botón es otra cosa y por eso es otra condición: pausar un dictado que
+  // todavía no puede existir no significa nada durante TODO el asistente, no
+  // sólo mientras falta el modelo. Atado a la condición de arriba, "Pausar"
+  // reaparecía en medio de la bienvenida apenas el estado pasaba a "cargando".
+  const ocultarPausa = mostrarAsistente;
 
   return (
     <div className="app" data-estado={clave}>
@@ -136,7 +143,7 @@ export default function App() {
           </div>
         )}
 
-        {estado && !ocultarPastilla && (
+        {estado && !ocultarPausa && (
           <button type="button" className="boton chico" onClick={alternarPausa}>
             {estado.pausado ? "Reanudar" : "Pausar"}
           </button>
@@ -167,17 +174,20 @@ export default function App() {
       <main className="contenido">
         {fallo && <p className="error-vista">No pude hablar con el backend: {fallo}</p>}
 
-        {/* Con el asistente abierto el detalle sobra: lo único que puede decir
-            ahí es "todavía no hay ningún modelo descargado", y el asistente ES
-            la respuesta a eso. Repetirlo arriba hace ver rota una pantalla de
-            bienvenida. */}
-        {estado?.detalle && !mostrarAsistente && (
+        {/* Con el asistente abierto el detalle de `sin-modelo` sobra: lo único
+            que dice ahí es "todavía no hay ningún modelo descargado", y el
+            asistente ES la respuesta a eso. El de `error` NO: es alcanzable de
+            verdad durante la bienvenida (el atajo puede fallar mientras el
+            asistente está abierto) y esconderlo dejaba una pastilla roja sin un
+            solo motivo al lado de un "Todo listo". */}
+        {estado?.detalle && (!mostrarAsistente || clave === "error") && (
           <p className="detalle-estado">{estado.detalle}</p>
         )}
 
         {mostrarAsistente && catalogo ? (
           <Asistente
             catalogo={catalogo}
+            estado={estado}
             alCambiarCatalogo={cambiarCatalogo}
             alTerminar={(destino) => {
               setAsistenteCerrado(true);

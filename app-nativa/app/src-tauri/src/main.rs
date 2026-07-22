@@ -7,11 +7,16 @@
 //! | principal | ventana, bandeja, comandos | lo exige el sistema operativo |
 //! | `atajo` | `rdev::grab` | bloquea para siempre |
 //! | `director` | la máquina de estados | único escritor del estado |
-//! | `motor` | carga el modelo y transcribe | 20 s de arranque, segundos por dictado |
+//! | `motor` | carga el modelo y transcribe | entre 20 s y un minuto de arranque, segundos por dictado |
 //! | `sonidos` | los cuatro tonos | retiene el `Stream` de salida, que no es `Sync` |
 //!
 //! Se hablan por canales, nunca por memoria compartida mutable. La única
 //! memoria compartida es el espejo de sólo lectura del estado.
+//!
+//! El del motor es el único que puede arrancar **dos veces**: acá al abrir la
+//! aplicación y, si acá no había ningún modelo, apenas una descarga termina bien
+//! (ver [`motor::resolver_y_lanzar`] y `director::Director::modelo_descargado`).
+//! Los dos caminos pasan por la misma función a propósito.
 //!
 //! # Qué cierra la aplicación
 //!
@@ -131,10 +136,17 @@ fn preparar(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     handle.manage(sonidos.clone());
 
     let limite_grabacion_s = cfg.limite_grabacion_s as f32;
-    let al_motor = arrancar_motor(&handle, &cfg, &al_director);
+    // Si acá no se puede arrancar el motor, la aplicación sigue viva con un
+    // canal muerto: el director publica `SinModelo` o `Error` según el caso, y
+    // una descarga que termine bien lo vuelve a intentar sin reiniciar nada.
+    let al_motor = match motor::resolver_y_lanzar(&handle, &al_director, &cfg) {
+        Ok(canal) => canal,
+        Err(fallo) => motor_ausente(&al_director, fallo),
+    };
     atajo::lanzar(al_director.clone());
     director::lanzar(
         handle.clone(),
+        al_director,
         cola,
         al_motor,
         espejo,
@@ -142,40 +154,6 @@ fn preparar(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         limite_grabacion_s,
     );
     Ok(())
-}
-
-/// Resuelve el modelo y arranca el motor.
-///
-/// Si no se puede se devuelve un canal muerto y se le avisa al director, que
-/// sabe convertir cada clase de fallo en el estado que le toca: `SinModelo` si
-/// lo único que pasa es que todavía no se descargó nada —el primer arranque—,
-/// `Error` si algo se rompió de verdad. **No se sale de la aplicación**:
-/// descargar el modelo se hace desde Ajustes, o sea desde esta misma app
-/// corriendo.
-fn arrancar_motor(
-    handle: &tauri::AppHandle,
-    cfg: &ajustes::Ajustes,
-    al_director: &mpsc::Sender<Mensaje>,
-) -> mpsc::Sender<motor::AlMotor> {
-    let historial = match rutas::historial(handle) {
-        Ok(h) => h,
-        // Sin dónde escribir el historial no hay dictado, y no es algo que se
-        // arregle descargando un modelo: es una falla.
-        Err(e) => return motor_ausente(al_director, FalloDelMotor::Roto(e)),
-    };
-    println!("historial: {}", historial.display());
-
-    match rutas::modelo(cfg) {
-        Ok((ruta, aviso)) => {
-            if let Some(aviso) = aviso {
-                println!("{aviso}");
-                eventos::aviso(handle, &aviso, "info");
-            }
-            println!("cargando el modelo {}…", ruta.display());
-            motor::lanzar(al_director.clone(), ruta, historial, cfg.clone())
-        }
-        Err(fallo) => motor_ausente(al_director, fallo),
-    }
 }
 
 /// Un canal sin nadie del otro lado. Mandar audio ahí falla enseguida, que es

@@ -859,3 +859,259 @@ que mire la pantalla de bienvenida en el navegador ve un bug que ya no existe.
   ggml de verdad, así que prueban el orden real y no una maqueta.
 - `cargo clippy --workspace --all-targets -- -D warnings`: limpio.
 - `npm run build`: sin errores de TypeScript.
+
+---
+
+## Arreglo — el motor arranca sin reiniciar la app (21/7/2026)
+
+### El síntoma
+
+Instalación nueva, secuencia real de uso:
+
+1. La app arranca. No hay ningún `.gguf` en `%APPDATA%\MithFlow\models\`.
+2. `main.rs` resuelve la ruta del modelo, falla, y el hilo del motor **nunca se
+   lanza**.
+3. El asistente baja el modelo de medición, perfila la máquina y baja el
+   recomendado. Los dos quedan bien en el disco.
+4. La app **sigue** diciendo "todavía no hay ningún modelo descargado. Bajá uno
+   desde Ajustes para poder dictar." El dictado no funciona.
+5. Recién cerrando y volviendo a abrir la app, anda.
+
+El usuario hizo exactamente lo que la app le pidió, la app le seguía pidiendo lo
+mismo, y el mensaje **ya era falso**. Era contradictorio dentro de la misma
+ventana: Ajustes consulta el disco al abrirse y mostraba los modelos como
+"Descargado" mientras la cabecera insistía en que no había ninguno. El arreglo
+anterior ("Error" en el primer arranque) había corregido el COLOR de ese estado;
+esto corrige que el estado no se moviera nunca.
+
+### El arreglo: un solo camino para arrancar el motor, invocable dos veces
+
+El motor tenía un único momento de arranque, enterrado en `main.rs::arrancar_motor`.
+Ese cuerpo se movió a **`motor::resolver_y_lanzar(app, al_director, cfg)`**, que es
+ahora el camino que usan los dos momentos posibles:
+
+1. el arranque de la aplicación (`main.rs::preparar`);
+2. una descarga que termina bien **con el motor ausente**
+   (`director::lanzar_el_motor`).
+
+Que sea una sola función y no dos parecidas es lo que garantiza que el motor
+lanzado en caliente resuelva el modelo con **las mismas reglas** que el del
+arranque: `MITHFLOW_MODELO`, después el modelo elegido en Ajustes (que puede ser
+"automático"), después la sustitución por cualquier otro descargado con su aviso.
+Un segundo camino habría podido divergir en silencio.
+
+### Quién decide, y por qué ahí y no en el hilo de la descarga
+
+El hilo de la descarga **no decide nada**: manda `Mensaje::ModeloDescargado` al
+director y sigue. Quién sabe si hay un motor corriendo es el director y nadie
+más, y esa pregunta no se puede contestar leyendo un espejo desde otro hilo sin
+abrir una carrera: dos descargas seguidas —justo lo que hace el asistente, el
+modelo de medición y después el recomendado— leerían las dos "no hay motor" y
+lanzarían dos motores con hasta 1,5 GB de pesos cada uno. En el director hay una
+cola y un solo lector: la segunda descarga ve lo que dejó la primera.
+
+La regla vive suelta en `director::tras_una_descarga(&Estado) -> TrasLaDescarga`,
+sin tocar nada, para poder probarla sin levantar una aplicación de Tauri:
+
+| Estado al terminar la descarga | Qué se hace | Por qué |
+|---|---|---|
+| `SinModelo` | **`Lanzar`** | no hay motor y no lo hubo nunca: el caso del primer arranque |
+| `Cargando` | `YaEstaCargando` | ya hay uno cargándose; otro serían dos modelos compilando shaders a la vez |
+| `Listo` / `Grabando` / `Transcribiendo` | `AlReiniciar` | reemplazar el modelo en caliente son 1,5 GB y ~2 s en medio del trabajo |
+| `Error` | `AlReiniciar` | puede ser el atajo o el historial, y ninguno se arregla con un `.gguf` nuevo |
+
+`Error` entra en `AlReiniciar` y no en `Lanzar` a propósito: arrancar un motor
+encima de una falla real la taparía con un "Listo" que no sería cierto. Es la
+misma familia de guardas que ya protegía a `MotorListo(Ok)`.
+
+### El estado se mueve, y se ve
+
+`SinModelo` → `Cargando` → `Listo`. El paso intermedio se publica **antes** de que
+el modelo esté en memoria, y eso es lo que importa: cargar los pesos y compilar
+los shaders de Vulkan son **entre veinte segundos y un minuto** la primera vez en
+la máquina (17 s de shaders y 1,8 s de carga medidos en el escritorio; en una
+integrada, más). Ésa es la cifra única que dicen el código, la interfaz y esta
+documentación: antes el director prometía "unos segundos" y el asistente "entre
+veinte segundos y un minuto", y quien apretaba la tecla a los diez segundos creía
+que la app se había colgado.
+
+Sin publicar el paso intermedio, el usuario que acaba de bajar el modelo se queda
+mirando una pantalla que no cambia durante casi un minuto. Publicarlo además es lo
+que cierra la puerta al segundo lanzamiento, porque la descarga siguiente ya no ve
+`SinModelo`: las dos mitades son la misma línea de código.
+
+`pasa_a_listo_cuando_el_motor_avisa` quedó como función con nombre y no como
+`matches!` suelto justamente para poder decir eso en su documentación: es la
+puerta por la que sale el arranque en caliente, y si alguien la afloja el motor
+terminaría de cargar con la interfaz clavada en "Cargando…" para siempre. Por el
+mismo motivo el estado que publica `lanzar_el_motor` sale de
+`estado_al_lanzar_en_caliente()` y no de un `Estado::Cargando` escrito adentro:
+es el eslabón del que cuelgan las dos mitades, y un test que lo copiara de su
+lado seguiría verde aunque el director dejara de publicarlo.
+
+**El director nunca se bloquea.** `motor::lanzar` crea el hilo y vuelve; el minuto
+transcurre allá. El director sigue atendiendo la cola mientras tanto. `lanzar` es
+además **privada**: el único camino para arrancar el motor es
+`resolver_y_lanzar`, y que lo garantice el compilador es más fuerte que pedirlo
+en un comentario.
+
+### La carrera con el perfilado — el error más caro que podía quedar
+
+Desde que una descarga arranca el motor, el asistente hace esto: baja el modelo
+de medición → el motor empieza a cargar → menos de un segundo después empieza a
+**medir la máquina**, que carga su propio `Transcriber`. Dos modelos peleando por
+la misma GPU: la medición daría una máquina más lenta de lo que es y la
+recomendación saldría para abajo. Sería el peor error posible acá — silencioso, y
+se lleva puesta la calidad de todos los dictados que vengan después.
+
+Lo serializa un `Mutex<()>` estático, `motor::CARGA_DE_MODELO`. **Se serializa la
+CARGA, no el uso**: el motor suelta el testigo apenas terminó de cargar y
+calentar, y después sigue vivo con sus pesos en memoria sin retener nada. Nadie
+lo toma dos veces, así que no hay forma de trabarse. Un `Mutex` envenenado no
+invalida nada (protege `()`, no un dato con invariantes), así que se sigue igual
+en vez de tumbar la carga.
+
+**Serializar no alcanzaba.** Que las dos cargas no sean simultáneas no impide que
+las dos copias queden **residentes**: el motor no libera sus pesos ni sus buffers
+de Vulkan cuando suelta el testigo, así que el `Transcriber` del perfilado se
+abría encima (~1 GB con el `Q4_K_M`, ~3,2 GB si fuera el `F16`). En el escritorio
+no se nota; en una notebook con gráficos integrados y 8 GB —la tercera máquina
+objetivo del proyecto— ese segundo `Model::load` puede fallar o caer a CPU **en
+silencio**, y entonces el perfilado mide una máquina más lenta de la que es y
+recomienda un modelo peor del que corresponde. Es exactamente el error que este
+mutex vino a evitar, entrando por la otra puerta.
+
+Se cierra por donde correspondía: **el motor mide él mismo**. Cuando el `.gguf`
+que cargó es el de perfilado —el caso del primer arranque, y el permanente en las
+máquinas chicas— corre `hardware::medir_factor_tiempo_real` sobre su propio
+`Transcriber`, ya cargado y caliente, y publica el número en
+`motor::MotorResidente`. `perfilar_hardware` espera el testigo, encuentra esa
+medición y arma el perfil con `hardware::perfil_con_factor` **sin abrir un
+segundo modelo**. El primer arranque termina además más rápido: antes eran los
+~40 s del motor más los ~25 s del perfilado; ahora son los del motor más tres
+inferencias.
+
+Sólo se reusa con el modelo de perfilado: el número depende del modelo con el que
+se mide (uno más chico da un factor más alto) y los umbrales están calibrados
+sobre el `Q4_K_M`. Con otro modelo cargado se mide como siempre, y ahí se compara
+el backend del perfilado contra el del motor: si no coinciden —uno en Vulkan y el
+otro en CPU— se avisa, porque el número que decidió el modelo no sería el de la
+máquina que va a dictar.
+
+**Y la espera tiene tope.** `testigo_de_carga` recibe un plazo
+(`TOPE_DE_ESPERA`, dos minutos) y devuelve `None` si vence: sin él, un driver de
+Vulkan colgado del otro lado dejaba a la aplicación en `Cargando` para siempre,
+contestándole al atajo "todavía estoy preparando el motor" hasta que el usuario
+la matara. Vencido el plazo se sigue igual, que es estrictamente mejor que no
+arrancar nunca. El perfilado además **suelta el testigo apenas termina de medir**,
+antes de emitir el evento: el motor no tiene por qué esperar a que algo cruce al
+webview. La función lleva `#[must_use]` con motivo, porque
+`motor::testigo_de_carga(…);` compilaba y era un no-op silencioso.
+
+El costo visible es que la pantalla "Midiendo tu máquina" puede esperar a que el
+motor termine. Se dice en la propia pantalla, en castellano, en vez de dejar al
+usuario mirando una barra quieta.
+
+### Lo que el usuario ve ahora
+
+| Momento | Antes | Ahora |
+|---|---|---|
+| Termina la descarga con el motor ausente | "Modelo descargado. Reiniciá MithFlow para empezar a usarlo." + pastilla clavada en "Falta el modelo" | "Modelo descargado. Estoy cargando el motor; en cuanto diga «Listo» podés dictar." + pastilla "Cargando…" |
+| El motor termina de cargar | (no pasaba) | pastilla "Listo": ya se puede dictar, sin reiniciar |
+| Termina la descarga con el motor ya cargado | "Reiniciá MithFlow para empezar a usarlo." | "El cambio de modelo aplica cuando reinicies MithFlow." (**igual que antes en lo funcional**: no se reemplaza en caliente) |
+| Última pantalla del asistente | "Reiniciá MithFlow para que el motor lo cargue" | lo que el motor esté haciendo **de verdad**, leído del estado en vivo |
+
+Ningún aviso de descarga puede volver a decir que no hay ningún modelo —se acaba
+de bajar uno— y hay un test que lo recorre. La simetría también: los dos casos en
+los que el modelo recién bajado NO es el que se va a cargar ahora **sí** dicen que
+hace falta reiniciar. Callarlo sería la mentira al revés.
+
+La última pantalla del asistente aclara además, cuando corresponde, que se va a
+dictar con el modelo de medición y que el elegido se carga al reiniciar: es la
+consecuencia honesta de no reemplazar el modelo en caliente.
+
+### Un `.gguf` que nunca se verificó no puede arrancar el motor
+
+`models::descargar` tenía una rama corta: si el modelo "ya está", devuelve `Ok`
+sin bajar nada. Y "ya está" lo decidía `esta_descargado`, que **sólo compara el
+tamaño**. Ese `Ok` es indistinguible del de una descarga real, así que desde este
+cambio dispara el lanzamiento del motor sobre un archivo cuyo hash no miró nadie
+nunca: una copia traída a mano de otra máquina, o un archivo del tamaño exacto y
+contenido distinto.
+
+Lo peor era que el control ya existía. `models::verificar_instalado` está escrita
+justo para esto —recalcula el hash del modelo instalado y lo compara con el
+compilado— y **no tenía un solo llamador en todo el repositorio**: un control
+documentado y muerto.
+
+Ahora la rama corta pasa por ella, y la invariante del módulo es que **un `Ok` de
+`descargar` significa que ese archivo verificó contra el hash compilado**, salga
+por la rama que salga. Un archivo que no verifica no se da por bueno y **no se
+borra**: se renombra a `<nombre>.gguf.invalido`. Borrarlo sería destruir 1,5 GB
+que el usuario puede haber traído a mano (esto no es un `.part` de la propia
+descarga); dejarlo con su nombre bueno sería peor todavía, porque con el tamaño
+correcto `esta_descargado` volvería a darlo por instalado en el próximo arranque.
+Renombrarlo deja al usuario en el único estado honesto —no hay ningún modelo
+usable, "Falta el modelo"— con el botón "Descargar" funcionando de nuevo, que es
+la salida.
+
+Se decidió **no** publicar `Estado::Error` en ese caso, y es deliberado: `Error`
+no ofrece salida y el usuario quedaría trabado, mientras que `SinModelo` más el
+motivo en rojo de la descarga dice la verdad y el reintento resuelve. Lo que sí
+es innegociable, y es lo que se cerró, es que ese hash que no coincide **nunca**
+se cuente como "listo para dictar".
+
+### El backend simulado, otra vez
+
+`src/desarrollo/backendSimulado.ts` dejaba el estado clavado en `sin-modelo`
+después de una descarga: o sea, seguía reproduciendo el bug. Ahora publica
+`sin-modelo` → `cargando` → `listo` con sus avisos, con la carga acortada a 5 s
+para poder iterar pero **no a cero**, porque el paso intermedio es justamente lo
+que hay que poder mirar.
+
+Y reproduce los **tres** casos de `TrasLaDescarga`, no dos: colapsar
+`YaEstaCargando` con `AlReiniciar` enseñaba en el navegador un comportamiento que
+la app no tiene. El orden también estaba al revés —avisaba y después publicaba el
+estado, cuando el director hace lo contrario—: un simulado que enseña el orden
+equivocado es peor que no tenerlo.
+
+### Los textos que mentían cuando el estado es `Error`
+
+`Estado::Error` es alcanzable de verdad en una instalación nueva: el atajo puede
+quedar tomado por otra aplicación mientras el asistente está abierto. Tres textos
+lo trataban como si fuera "todavía no hay modelo":
+
+- La última pantalla del asistente mandaba a **reiniciar MithFlow**. Reiniciar no
+  devuelve una tecla que tiene otra app. Ahora `error` tiene su propia rama, dice
+  que el motivo está arriba y nombra la causa más común y dónde se arregla.
+- Ajustes decía "la única excepción es no tener ninguno". La excepción no es "no
+  tener ninguno" sino que el estado sea `SinModelo`; con `Error` bajar un modelo
+  no arranca nada.
+- `App.tsx` escondía el detalle del estado con el asistente abierto, así que se
+  veía una pastilla roja "Error" **sin un solo motivo** al lado de un "Todo
+  listo". El de `sin-modelo` se sigue escondiendo —el asistente ES la respuesta a
+  eso—; el de `error`, no. El título de esa pantalla tampoco dice "Todo listo"
+  cuando no lo está.
+
+### Ocultar la pastilla y ocultar "Pausar" son dos cosas distintas
+
+Estaban atadas a la misma condición (`asistente && sin-modelo`). Desde que la
+descarga mueve el estado a `cargando` con el asistente todavía abierto, "Pausar"
+reaparecía en medio de la bienvenida — y pausar un dictado que todavía no puede
+existir no significa nada durante **todo** el asistente. La pastilla, en cambio,
+sí tiene que verse: los textos nuevos mandan a mirarla ("en cuanto arriba diga
+«Listo»"). Son dos condiciones ahora.
+
+### Verificación
+
+- `cargo test --workspace`: **91 núcleo + 75 app** (eran 88 y 67). Los nuevos
+  cubren: un modelo instalado que no verifica no pasa por bueno y pierde su
+  nombre; el perfil armado con un factor reusado decide igual que la función
+  pura; la carga de modelo es de a una por vez **con dos hilos de verdad**; la
+  espera del testigo tiene plazo; sólo el modelo de perfilado sirve para medir;
+  el perfilado reusa la medición del motor sin abrir un segundo modelo; un
+  backend distinto al del motor se avisa; y la invariante "no puede existir un
+  motor vivo con el estado en `SinModelo`".
+- `cargo clippy --workspace --all-targets -- -D warnings`: limpio.
+- `npm run build` y `tsc --noEmit`: sin errores.
+- Instalador NSIS regenerado y copiado a `D:\MithFlow\instalador\`.

@@ -17,6 +17,15 @@
  * Medir necesita un modelo, así que el primero que se baja es el de perfilado
  * (`catalogo.modelo_de_perfilado`, el más chico). No se tira después: es un
  * modelo usable, y si termina siendo el recomendado no hay segunda descarga.
+ *
+ * # Por qué la última pantalla mira el estado en vivo
+ *
+ * Esa primera descarga **arranca el motor sin reiniciar** (ver
+ * `director::modelo_descargado`). Hasta que eso existió, esta pantalla mandaba a
+ * reiniciar MithFlow: hoy sería pedirle al usuario algo que ya no hace falta.
+ * Como cargar los pesos y compilar los shaders tardan, tampoco se puede decir
+ * "ya podés dictar" sin mirar: lo que se muestra sale de `estado`, que es lo que
+ * el motor está haciendo de verdad.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
@@ -30,6 +39,8 @@ import {
   mensajeDeError,
   perfilarHardware,
   type Catalogo,
+  type ClaveEstado,
+  type EstadoDto,
   type ModeloDto,
   type PerfilDto,
   type ProgresoDescarga,
@@ -66,12 +77,23 @@ const ETAPA: Record<Paso, number> = {
 
 interface Props {
   catalogo: Catalogo;
+  /**
+   * Lo que el motor está haciendo, en vivo. La última pantalla depende de esto:
+   * bajar el primer modelo lo arranca solo, y hasta que termine de cargar no se
+   * puede dictar todavía.
+   */
+  estado: EstadoDto | null;
   alCambiarCatalogo: (catalogo: Catalogo) => void;
   /** Cierra el asistente y deja la app en la vista indicada. */
   alTerminar: (destino: "dashboard" | "ajustes") => void;
 }
 
-export default function Asistente({ catalogo, alCambiarCatalogo, alTerminar }: Props) {
+export default function Asistente({
+  catalogo,
+  estado,
+  alCambiarCatalogo,
+  alTerminar,
+}: Props) {
   const [paso, setPaso] = useState<Paso>("intro");
   const [perfil, setPerfil] = useState<PerfilDto | null>(null);
   const [elegido, setElegido] = useState<string | null>(null);
@@ -182,7 +204,7 @@ export default function Asistente({ catalogo, alCambiarCatalogo, alTerminar }: P
         ))}
       </div>
 
-      <h2>{TITULOS[paso]}</h2>
+      <h2>{tituloDe(paso, estado?.estado)}</h2>
 
       {error && <p className="error-vista">{error}</p>}
 
@@ -258,7 +280,12 @@ export default function Asistente({ catalogo, alCambiarCatalogo, alTerminar }: P
           <p className="intro">
             Transcribiendo el audio de referencia unas cuantas veces y quedándome
             con la mediana. Tarda unos veinte segundos; la primera pasada se
-            descarta porque incluye la compilación de los shaders.
+            descarta porque incluye la compilación de los shaders. Si el motor
+            todavía está cargando el modelo que acabás de bajar, espero a que
+            termine: midiendo contra él, tu máquina parecería más lenta de lo que
+            es. Y si midió con ese mismo modelo, uso su medición en vez de cargar
+            una segunda copia, que en una máquina con poca memoria es la
+            diferencia entre medirla bien y medirla mal.
           </p>
           <Progreso porcentaje={100} izquierda="Midiendo…" />
         </>
@@ -353,12 +380,16 @@ export default function Asistente({ catalogo, alCambiarCatalogo, alTerminar }: P
 
       {paso === "listo" && (
         <>
-          <p className="intro">
-            El modelo está en tu disco y quedó elegido en Ajustes. Reiniciá
-            MithFlow para que el motor lo cargue, y después apretá la tecla de
-            dictado, hablá, y apretala de nuevo: el texto se pega solo donde
-            tengas el cursor.
-          </p>
+          <p className="intro">{comoQuedaElMotor(estado?.estado)}</p>
+          {modeloPendiente(catalogo, elegido, estado?.estado) && (
+            <p className="porque">
+              Vas a dictar con {etiquetaDe(catalogo, catalogo.modelo_de_perfilado)},
+              que fue el primero que se bajó y con el que el motor ya arrancó.{" "}
+              {etiquetaDe(catalogo, elegido)} quedó elegido en Ajustes y se carga
+              la próxima vez que abras MithFlow: cambiarlo ahora sería más de un
+              gigabyte de memoria en medio de lo que estés haciendo.
+            </p>
+          )}
           <p className="porque">
             Nada de esto sale de tu máquina: el audio se transcribe acá y se borra.
           </p>
@@ -377,9 +408,89 @@ export default function Asistente({ catalogo, alCambiarCatalogo, alTerminar }: P
   );
 }
 
+/**
+ * El título de la pantalla. El único que depende del estado es el último:
+ * "Todo listo" arriba de una pastilla roja que dice "Error" es la contradicción
+ * que este asistente ya tuvo una vez, con "Falta el modelo".
+ */
+function tituloDe(paso: Paso, clave: ClaveEstado | undefined): string {
+  if (paso === "listo" && clave === "error") return "Falta resolver una cosa";
+  return TITULOS[paso];
+}
+
 /** El peso del modelo con esa clave, o 0 si no está en el catálogo. */
 function pesoDeModelo(catalogo: Catalogo, clave: string): number {
   return catalogo.modelos.find((m) => m.clave === clave)?.megabytes ?? 0;
+}
+
+/** El nombre que se le muestra al usuario, o la clave pelada si no aparece. */
+function etiquetaDe(catalogo: Catalogo, clave: string | null): string {
+  if (!clave) return "el modelo elegido";
+  return catalogo.modelos.find((m) => m.clave === clave)?.etiqueta ?? clave;
+}
+
+/** ¿Hay un motor cargado o cargándose? Son los cuatro estados que lo implican. */
+function elMotorArranco(clave: ClaveEstado | undefined): boolean {
+  return (
+    clave === "cargando" ||
+    clave === "listo" ||
+    clave === "grabando" ||
+    clave === "transcribiendo"
+  );
+}
+
+/**
+ * Qué puede hacer el usuario ya, según lo que el motor esté haciendo de verdad.
+ *
+ * Se mira el estado en vivo y no una suposición: bajar el primer modelo arranca
+ * el motor sin reiniciar, así que mandar a reiniciar acá —lo que esta pantalla
+ * decía antes— sería pedirle al usuario algo que ya no hace falta. Pero cargar
+ * los pesos y compilar los shaders tardan, y decir "ya podés dictar" mientras
+ * eso pasa sería la misma mentira al revés.
+ */
+function comoQuedaElMotor(clave: ClaveEstado | undefined): string {
+  const dictar =
+    "apretá la tecla de dictado, hablá, y apretala de nuevo: el texto se pega solo donde tengas el cursor.";
+  if (clave === "cargando") {
+    return `El modelo está en tu disco y lo estoy cargando: la primera vez, compilar los shaders de tu placa tarda entre veinte segundos y un minuto. En cuanto arriba diga «Listo», ${dictar}`;
+  }
+  if (elMotorArranco(clave)) {
+    return `El modelo está cargado y MithFlow ya puede dictar: ${dictar}`;
+  }
+  // `error` va aparte de `sin-modelo`, y no es un detalle: es alcanzable de
+  // verdad en una instalación nueva —el atajo puede quedar tomado por otra
+  // aplicación mientras el asistente está abierto— y ahí reiniciar NO arregla
+  // nada. Mandar a reiniciar sería hacerle perder el tiempo al usuario con lo
+  // único que seguro no es la solución.
+  if (clave === "error") {
+    return (
+      "El modelo está en tu disco y quedó elegido en Ajustes, pero hay algo más que impide " +
+      "dictar: el motivo está arriba, al lado de «Error». Reiniciar no lo arregla. Lo más " +
+      "común es que otra aplicación tenga tomada la tecla de dictado; podés elegir otra en " +
+      "Ajustes y probar de nuevo."
+    );
+  }
+  // `sin-modelo` o todavía sin estado: el motor no llegó a arrancar, y esto sí
+  // se resuelve abriendo la app de nuevo.
+  return `El modelo está en tu disco y quedó elegido en Ajustes. Reiniciá MithFlow para que el motor lo cargue, y después ${dictar}`;
+}
+
+/**
+ * ¿El modelo elegido NO es el que el motor tiene cargado?
+ *
+ * Pasa siempre que la recomendación no sea el modelo de medición: el motor
+ * arrancó con el primero que se bajó y el cambio de modelo, como en Ajustes,
+ * aplica al reiniciar. Vale la pena decirlo sólo si el motor de verdad arrancó;
+ * si no, la pantalla ya está mandando a reiniciar por otro motivo.
+ */
+function modeloPendiente(
+  catalogo: Catalogo,
+  elegido: string | null,
+  clave: ClaveEstado | undefined,
+): boolean {
+  return (
+    elMotorArranco(clave) && elegido !== null && elegido !== catalogo.modelo_de_perfilado
+  );
 }
 
 /**

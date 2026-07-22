@@ -279,6 +279,38 @@ fn clase(tipo: wgpu::DeviceType) -> &'static str {
     }
 }
 
+/// Arma el perfil completo a partir del único número que hay que medir.
+///
+/// Está separada de [`perfilar`] porque el factor puede venir de dos lados y el
+/// resto del perfil —RAM, adaptador, decisión— es el mismo en los dos:
+///
+/// 1. medido acá, abriendo un `Transcriber` propio ([`perfilar`]);
+/// 2. **reusado del motor**, que ya tiene el modelo cargado y lo midió con él.
+///
+/// Lo segundo es lo que evita tener dos copias del modelo en memoria a la vez.
+/// En el escritorio daría igual; en una notebook con gráficos integrados y 8 GB,
+/// el segundo `Transcriber` puede no entrar y caer a CPU **en silencio**: el
+/// perfilado mediría una máquina más lenta de la que es y recomendaría un
+/// modelo peor del que corresponde, que es exactamente el error que este módulo
+/// existe para no cometer.
+///
+/// `backend` es el que reporta quien midió, no el que se pidió: la diferencia
+/// entre los dos ES la caída a CPU.
+pub fn perfil_con_factor(factor_tiempo_real: f32, backend: String) -> PerfilHardware {
+    let ram_total_gb = ram_total_gb();
+    let gpu = describir_gpu();
+    let gpu_dedicada = gpu.as_ref().is_some_and(|g| g.dedicada);
+    PerfilHardware {
+        ram_total_gb,
+        gpu_clase: gpu.as_ref().map(|g| g.clase),
+        gpu_nombre: gpu.map(|g| g.nombre),
+        gpu_dedicada,
+        backend,
+        factor_tiempo_real,
+        modelo_recomendado: elegir_modelo(factor_tiempo_real, ram_total_gb, gpu_dedicada),
+    }
+}
+
 /// Los [`SEGUNDOS_DE_REFERENCIA`] de audio con los que se mide.
 ///
 /// Es un tono generado acá y no un WAV empaquetado: la señal es idéntica en las
@@ -306,8 +338,8 @@ pub use medicion::{medir_factor_tiempo_real, perfilar};
 #[cfg(windows)]
 mod medicion {
     use super::{
-        audio_de_referencia, describir_gpu, elegir_modelo, ram_total_gb, PerfilHardware,
-        PASADAS_MEDIDAS, SEGUNDOS_DE_REFERENCIA,
+        audio_de_referencia, perfil_con_factor, PerfilHardware, PASADAS_MEDIDAS,
+        SEGUNDOS_DE_REFERENCIA,
     };
     use crate::stt::Transcriber;
     use std::path::Path;
@@ -324,29 +356,18 @@ mod medicion {
     /// Cuesta lo que cuesten cuatro inferencias más la carga del modelo, y la
     /// primera vez de todas también la compilación de los shaders de Vulkan
     /// (17 s medidos). Va en un hilo aparte, no en el que dibuja la interfaz.
+    /// **Abre un `Transcriber` propio**, así que quien ya tenga uno cargado con
+    /// este mismo modelo no debería llamar acá: le alcanza con medir sobre el
+    /// suyo y armar el perfil con [`perfil_con_factor`]. Dos copias del modelo
+    /// residentes a la vez es lo que rompe una máquina chica.
     pub fn perfilar(modelo_de_prueba: &Path) -> Result<PerfilHardware, String> {
-        let ram_total_gb = ram_total_gb();
-        let gpu = describir_gpu();
-
         // Acá no hace falta distinguir por qué no abrió: perfilar SIEMPRE se
         // llama con un modelo que el asistente acaba de descargar, así que
         // cualquier fallo es igual de excepcional y el texto alcanza.
         let mut transcriber = Transcriber::new(modelo_de_prueba).map_err(|e| e.to_string())?;
         let backend = transcriber.backend();
         let factor_tiempo_real = medir_factor_tiempo_real(&mut transcriber)?;
-
-        let gpu_dedicada = gpu.as_ref().is_some_and(|g| g.dedicada);
-        let modelo_recomendado = elegir_modelo(factor_tiempo_real, ram_total_gb, gpu_dedicada);
-
-        Ok(PerfilHardware {
-            ram_total_gb,
-            gpu_clase: gpu.as_ref().map(|g| g.clase),
-            gpu_nombre: gpu.map(|g| g.nombre),
-            gpu_dedicada,
-            backend,
-            factor_tiempo_real,
-            modelo_recomendado,
-        })
+        Ok(perfil_con_factor(factor_tiempo_real, backend))
     }
 
     /// Segundos de audio procesados por segundo de reloj.
@@ -574,6 +595,28 @@ mod tests {
         assert!(
             ram > 0.5 && ram < 4096.0,
             "la RAM total dio {ram} GB, que no es creíble"
+        );
+    }
+
+    /// El perfil armado con un factor ya medido tiene que decidir **lo mismo**
+    /// que la función pura. Es el camino por el que sale el perfilado cuando
+    /// reusa la medición del motor en vez de abrir un segundo `Transcriber`: si
+    /// divergiera, la recomendación dependería de quién midió.
+    #[test]
+    fn el_perfil_armado_con_un_factor_decide_igual_que_la_funcion_pura() {
+        let perfil = perfil_con_factor(43.0, "vulkan".to_string());
+
+        assert_eq!(perfil.factor_tiempo_real, 43.0);
+        assert_eq!(perfil.backend, "vulkan");
+        assert_eq!(
+            perfil.modelo_recomendado,
+            elegir_modelo(43.0, perfil.ram_total_gb, perfil.gpu_dedicada),
+            "el perfil reusado no coincide con la función pura de decisión"
+        );
+        assert_eq!(
+            perfil.gpu_dedicada,
+            perfil.gpu_clase == Some("dedicada"),
+            "el bit que decide y la clase informativa tienen que contar lo mismo"
         );
     }
 

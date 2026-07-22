@@ -18,7 +18,7 @@ use crate::director::{AlDirector, Mensaje};
 use crate::estado::{EstadoCompartido, EstadoDto};
 use crate::eventos::{self, ProgresoDescarga};
 use crate::sonidos::Sonidos;
-use crate::{atajo, rutas};
+use crate::{atajo, motor, rutas};
 use mithflow_core::history::Entry;
 use mithflow_core::models::{self, Modelo};
 use mithflow_core::{hardware, history, metricas};
@@ -322,6 +322,20 @@ pub struct PerfilDto {
 }
 
 impl PerfilDto {
+    fn medido(perfil: hardware::PerfilHardware) -> Self {
+        Self {
+            ram_total_gb: perfil.ram_total_gb,
+            gpu_nombre: perfil.gpu_nombre,
+            gpu_clase: perfil.gpu_clase,
+            gpu_dedicada: perfil.gpu_dedicada,
+            backend: perfil.backend,
+            factor_tiempo_real: perfil.factor_tiempo_real,
+            modelo_recomendado: clave_modelo(perfil.modelo_recomendado),
+            etiqueta_recomendado: perfil.modelo_recomendado.to_string(),
+            error: None,
+        }
+    }
+
     /// El perfil que se emite cuando la medición no se pudo hacer. Los ceros no
     /// son datos: van acompañados del `error`, que es lo que la interfaz
     /// muestra.
@@ -344,6 +358,17 @@ impl PerfilDto {
 ///
 /// Necesita el modelo de perfilado descargado: es el más liviano justamente
 /// porque esto corre antes de saber cuál conviene.
+///
+/// # Por qué espera al motor y por qué reusa su medición
+///
+/// Desde que una descarga arranca el motor sin reiniciar, el asistente baja el
+/// modelo de medición, eso lanza el motor, y menos de un segundo después esto
+/// empieza a medir. Medir con otra carga peleando por la misma GPU daría una
+/// máquina más lenta de lo que es. Peor todavía: los dos `Transcriber` quedarían
+/// residentes a la vez, y en una notebook con gráficos integrados y 8 GB el
+/// segundo puede caer a CPU en silencio. Por eso se espera el testigo **y**, si
+/// el motor ya midió con el mismo modelo, se usa su número en vez de abrir una
+/// segunda copia (ver `motor::medir_si_es_el_de_perfilado`).
 #[tauri::command]
 pub fn perfilar_hardware(app: AppHandle) -> Result<(), String> {
     let Some(testigo) = Testigo::tomar(&PERFILANDO) else {
@@ -362,20 +387,26 @@ pub fn perfilar_hardware(app: AppHandle) -> Result<(), String> {
         .name("mithflow-perfilado".into())
         .spawn(move || {
             let _testigo = testigo;
-            let carga = match hardware::perfilar(&ruta) {
-                Ok(p) => PerfilDto {
-                    ram_total_gb: p.ram_total_gb,
-                    gpu_nombre: p.gpu_nombre,
-                    gpu_clase: p.gpu_clase,
-                    gpu_dedicada: p.gpu_dedicada,
-                    backend: p.backend,
-                    factor_tiempo_real: p.factor_tiempo_real,
-                    modelo_recomendado: clave_modelo(p.modelo_recomendado),
-                    etiqueta_recomendado: p.modelo_recomendado.to_string(),
-                    error: None,
-                },
-                Err(e) => PerfilDto::fallado(e),
-            };
+            // Espera a que el motor termine de cargar. Con tope: si del otro
+            // lado se colgó un driver, medir mal es mejor que no medir nunca.
+            let exclusiva = motor::testigo_de_carga(motor::TOPE_DE_ESPERA);
+            if exclusiva.is_none() {
+                eprintln!(
+                    "el motor no soltó el testigo en {} s; mido igual, el número puede salir bajo",
+                    motor::TOPE_DE_ESPERA.as_secs()
+                );
+            }
+
+            let residente = motor::residente();
+            let carga = medir(&ruta, residente.as_ref());
+            // Se suelta ACÁ y no al terminar el hilo: emitir no necesita la
+            // placa, y el motor no tiene por qué esperar a que un evento cruce
+            // al webview para empezar a cargar.
+            drop(exclusiva);
+
+            if let Some(aviso) = discrepancia_de_backend(&carga, residente.as_ref()) {
+                eventos::aviso(&app, &aviso, "error");
+            }
             if let Err(e) = app.emit(eventos::PERFILADO_LISTO, carga) {
                 eprintln!("no pude emitir el perfilado: {e}");
             }
@@ -384,18 +415,80 @@ pub fn perfilar_hardware(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// Mide la máquina, **reusando el motor si ya midió con este mismo modelo**.
+///
+/// Ese atajo es lo que evita la segunda copia del modelo en memoria; ver la
+/// nota de [`perfilar_hardware`]. Cuando no hay nada que reusar —no hay motor,
+/// o tiene cargado otro modelo— se mide como siempre.
+fn medir(ruta: &std::path::Path, residente: Option<&motor::MotorResidente>) -> PerfilDto {
+    if let Some((factor, backend)) = residente.and_then(motor::MotorResidente::medicion_reutilizable)
+    {
+        println!("perfilado: reuso la medición del motor ({factor:.2}x sobre {backend})");
+        return PerfilDto::medido(hardware::perfil_con_factor(factor, backend));
+    }
+    match hardware::perfilar(ruta) {
+        Ok(perfil) => PerfilDto::medido(perfil),
+        Err(e) => PerfilDto::fallado(e),
+    }
+}
+
+/// El aviso cuando la medición y el motor no ligaron al mismo backend.
+///
+/// Es la caída a CPU en silencio: si el motor anda por Vulkan y la medición
+/// midió por procesador (o al revés), el número que decide el modelo **no es el
+/// de la máquina que va a dictar**, y la recomendación sale de una medición que
+/// no corresponde. Callarlo sería el error caro de este módulo: silencioso, y se
+/// lleva puesta la calidad de todos los dictados que vengan después.
+///
+/// `None` cuando no hay con qué comparar (no hay motor, o el perfil falló) o
+/// cuando coinciden, que es lo normal.
+fn discrepancia_de_backend(
+    perfil: &PerfilDto,
+    residente: Option<&motor::MotorResidente>,
+) -> Option<String> {
+    if perfil.error.is_some() || perfil.backend.is_empty() {
+        return None;
+    }
+    let del_motor = residente.map(|r| r.backend.as_str())?;
+    if del_motor.eq_ignore_ascii_case(&perfil.backend) {
+        return None;
+    }
+    Some(format!(
+        "Medí tu máquina con «{}» pero el motor está dictando con «{del_motor}». \
+         La recomendación puede quedar corta: volvé a medirla desde Ajustes cuando \
+         el motor esté cargado.",
+        perfil.backend
+    ))
+}
+
 /// Baja un modelo del catálogo informando por `progreso-descarga`.
 ///
 /// La clave se valida contra el catálogo compilado: la URL y el SHA-256 salen
 /// de ahí, nunca de lo que mande el frontend.
+///
+/// # Qué pasa cuando termina
+///
+/// Se le avisa al director con [`Mensaje::ModeloDescargado`] y **ahí termina la
+/// responsabilidad de este hilo**. No decide nada más: si el motor está ausente
+/// —la app recién instalada, que es el caso que este aviso vino a cerrar— lo
+/// lanza el director, y si ya hay uno corriendo el cambio de modelo sigue siendo
+/// cosa del próximo arranque. La decisión vive allá porque el estado del motor
+/// lo conoce el director y nadie más; consultarlo desde acá sería una carrera
+/// con dos descargas seguidas.
 #[tauri::command]
-pub fn descargar_modelo(app: AppHandle, clave: String) -> Result<(), String> {
+pub fn descargar_modelo(
+    app: AppHandle,
+    clave: String,
+    al_director: State<'_, AlDirector>,
+) -> Result<(), String> {
     let modelo = ajustes::modelo_de_clave(&clave)
         .ok_or_else(|| format!("no conozco el modelo '{clave}'"))?;
     let Some(testigo) = Testigo::tomar(&DESCARGANDO) else {
         return Err("ya hay una descarga en curso".to_string());
     };
     let etiqueta = clave_modelo(modelo);
+    // El `State` no se puede mover al hilo; el emisor sí, y clonarlo no cuesta.
+    let avisar_al_director = al_director.emisor();
 
     std::thread::Builder::new()
         .name("mithflow-descarga".into())
@@ -410,16 +503,13 @@ pub fn descargar_modelo(app: AppHandle, clave: String) -> Result<(), String> {
             });
             let final_ = match salida {
                 Ok(_) => {
-                    // Cerrar el lazo: el motor carga el modelo UNA vez, al
-                    // arrancar. Sin este aviso, alguien que abrió la app sin
-                    // ningún modelo, la vio en "Falta el modelo" y bajó uno
-                    // desde Ajustes se queda mirando la misma pastilla sin
-                    // saber que ya está.
-                    eventos::aviso(
-                        &app,
-                        "Modelo descargado. Reiniciá MithFlow para empezar a usarlo.",
-                        "info",
-                    );
+                    // Antes que el progreso final: el director es quien cuenta
+                    // qué significa la descarga —motor lanzándose o cambio para
+                    // el próximo arranque— y ese aviso tiene que llegar sin
+                    // depender de que la ventana esté abierta.
+                    if avisar_al_director.send(Mensaje::ModeloDescargado).is_err() {
+                        eprintln!("el director no escucha: el modelo bajado no arranca el motor");
+                    }
                     ProgresoDescarga {
                         terminado: true,
                         ..ProgresoDescarga::en_curso(etiqueta, modelo.bytes(), modelo.bytes())
@@ -545,6 +635,77 @@ mod tests {
 
         let ninguna = paginar(&historial_de_prueba(), 50, 0, Some(".*"));
         assert_eq!(ninguna.total, 0, "se interpretó como expresión regular");
+    }
+
+    fn motor_en(backend: &str, factor: Option<f32>) -> motor::MotorResidente {
+        motor::MotorResidente {
+            backend: backend.to_string(),
+            factor_tiempo_real: factor,
+        }
+    }
+
+    /// Con el motor ya cargado y medido, el perfilado **no abre un segundo
+    /// modelo**: usa ese número. Es lo que evita tener dos copias de los pesos
+    /// residentes a la vez, que en una máquina de 8 GB con gráficos integrados
+    /// es la diferencia entre medir bien y medir una máquina más lenta.
+    ///
+    /// Que no cargue nada es justamente lo que hace que este test pueda correr
+    /// sin un `.gguf` de 500 MB en el disco.
+    #[test]
+    fn con_el_motor_ya_medido_el_perfilado_reusa_su_numero() {
+        let perfil = medir(
+            std::path::Path::new("no-existe.gguf"),
+            Some(&motor_en("vulkan", Some(3.5))),
+        );
+
+        assert_eq!(perfil.error, None, "no tenía que intentar cargar nada");
+        assert_eq!(perfil.factor_tiempo_real, 3.5);
+        assert_eq!(perfil.backend, "vulkan");
+        assert!(
+            !perfil.modelo_recomendado.is_empty(),
+            "la recomendación tiene que salir igual que midiendo de cero"
+        );
+    }
+
+    /// Y el atajo no se toma cuando no hay nada que reusar: sin motor, o con
+    /// uno cargado con otro modelo (cuya medición no es comparable). Ahí se
+    /// mide como siempre, abriendo el modelo de perfilado.
+    #[test]
+    fn sin_medicion_del_motor_no_hay_atajo() {
+        let sin_medir = motor_en("vulkan", None);
+        assert!(
+            sin_medir.medicion_reutilizable().is_none(),
+            "un motor cargado con otro modelo no tiene medición que sirva"
+        );
+        let sin_motor: Option<&motor::MotorResidente> = None;
+        assert!(sin_motor
+            .and_then(motor::MotorResidente::medicion_reutilizable)
+            .is_none());
+    }
+
+    /// Dos backends distintos significan que el número que decidió el modelo no
+    /// es el de la máquina que va a dictar. No puede pasar en silencio.
+    #[test]
+    fn un_backend_distinto_al_del_motor_se_avisa() {
+        let mut perfil = PerfilDto::medido(hardware::perfil_con_factor(3.5, "cpu".to_string()));
+        let aviso = discrepancia_de_backend(&perfil, Some(&motor_en("vulkan", None)))
+            .expect("medir por CPU con el motor en Vulkan tiene que avisarse");
+        assert!(aviso.contains("cpu") && aviso.contains("vulkan"), "{aviso}");
+
+        // Y lo normal —el mismo backend— no molesta a nadie. Ni siquiera si
+        // uno viene en mayúsculas.
+        assert_eq!(
+            discrepancia_de_backend(&perfil, Some(&motor_en("CPU", None))),
+            None
+        );
+        assert_eq!(discrepancia_de_backend(&perfil, None), None, "no hay motor");
+
+        perfil.error = Some("no pude medir".into());
+        assert_eq!(
+            discrepancia_de_backend(&perfil, Some(&motor_en("vulkan", None))),
+            None,
+            "un perfilado que falló ya se cuenta solo; no hay backend que comparar"
+        );
     }
 
     /// El catálogo es lo único que la interfaz ve del modelo de perfilado: si

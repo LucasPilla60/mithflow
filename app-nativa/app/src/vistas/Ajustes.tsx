@@ -280,9 +280,13 @@ export default function VistaAjustes({ alCambiarCatalogo, avisar }: Props) {
       <section className="seccion">
         <h2>Modelo</h2>
         <p className="porque">
-          El modelo cambia recién la próxima vez que abras MithFlow: cargarlo son
-          casi dos segundos y más de un gigabyte de memoria, así que no se hace a
-          escondidas mientras dictás.
+          Cambiar de modelo aplica recién la próxima vez que abras MithFlow:
+          cargarlo son casi dos segundos y más de un gigabyte de memoria, así que
+          no se hace a escondidas mientras dictás. La única excepción es que el
+          motor todavía no haya arrancado por no haber ningún modelo —arriba dice
+          "Falta el modelo"—: ahí el primero que bajes lo arranca solo, sin
+          reiniciar. Si arriba dice "Error" no alcanza con bajar un modelo,
+          porque lo que falla es otra cosa y el motivo está a la vista.
         </p>
         <div className="modelos separado">
           <div className="fila-modelo">
@@ -344,7 +348,12 @@ export default function VistaAjustes({ alCambiarCatalogo, avisar }: Props) {
                 descarga.error
                   ? `Falló: ${descarga.error}`
                   : descarga.terminado
-                    ? `${descarga.modelo} descargado. Reiniciá MithFlow para usarlo.`
+                    ? // Qué significa la descarga —motor arrancando o cambio
+                      // para el próximo arranque— lo sabe sólo el backend, que
+                      // lo cuenta por `aviso`. Repetirlo acá a ciegas es cómo se
+                      // llegó a que la app pidiera reiniciar cuando ya no hacía
+                      // falta.
+                      `${descarga.modelo} descargado.`
                     : `Descargando ${descarga.modelo}…`
               }
               derecha={

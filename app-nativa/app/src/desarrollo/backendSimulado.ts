@@ -226,7 +226,23 @@ export function instalarBackendSimulado(escenario: Escenario) {
   const ajustes: Ajustes = { ...AJUSTES };
   const descargados = new Set(escenario === "primer-arranque" ? [] : ["F16", "Q4_K_M"]);
 
-  const estado: EstadoDto =
+  const CARGANDO: EstadoDto = {
+    estado: "cargando",
+    etiqueta: "Cargando…",
+    detalle: null,
+    pausado: false,
+  };
+  const LISTO: EstadoDto = {
+    estado: "listo",
+    etiqueta: "Listo",
+    detalle: null,
+    pausado: false,
+  };
+
+  // `let` y no `const`: desde que una descarga arranca el motor sin reiniciar,
+  // el estado del simulado también se MUEVE (`sin-modelo` → `cargando` →
+  // `listo`). Ver `trasLaDescarga`.
+  let estado: EstadoDto =
     escenario === "grabando"
       ? { estado: "grabando", etiqueta: "Grabando", detalle: null, pausado: false }
       : escenario === "primer-arranque"
@@ -241,7 +257,13 @@ export function instalarBackendSimulado(escenario: Escenario) {
               "todavía no hay ningún modelo descargado. Bajá uno desde Ajustes para poder dictar.",
             pausado: false,
           }
-        : { estado: "listo", etiqueta: "Listo", detalle: null, pausado: false };
+        : LISTO;
+
+  /** Publica un estado nuevo, como hace `Director::publicar`. */
+  const publicar = (nuevo: EstadoDto) => {
+    estado = nuevo;
+    void emit("estado-cambiado", nuevo);
+  };
 
   const catalogo = (): Catalogo => ({
     teclas: ["F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12", "Insert", "ScrollLock", "Pause"],
@@ -256,6 +278,46 @@ export function instalarBackendSimulado(escenario: Escenario) {
     limite_grabacion_maximo: 600,
     version: "1.0.0",
   });
+
+  /**
+   * Lo que hace `director::modelo_descargado` cuando una descarga termina bien.
+   *
+   * **Sin esta mitad el simulado volvería a mentir**: la pantalla de bienvenida
+   * en el navegador se quedaría en "Falta el modelo" para siempre, que es
+   * exactamente el bug que se acaba de arreglar.
+   *
+   * Los tres casos son los tres de `director::TrasLaDescarga`, con sus textos
+   * copiados tal cual, y en el mismo orden que el backend real: **primero se
+   * publica el estado y después se avisa**. Colapsar `YaEstaCargando` con
+   * `AlReiniciar`, o invertir el orden, es enseñar en el navegador un
+   * comportamiento que la app no tiene — que es justo para lo que NO sirve un
+   * simulado.
+   */
+  function trasLaDescarga() {
+    // `Lanzar`: no había motor y esta descarga lo arranca.
+    if (estado.estado === "sin-modelo") {
+      publicar(CARGANDO);
+      void emit("aviso", {
+        texto:
+          "Modelo descargado. Estoy cargando el motor; en cuanto diga «Listo» podés dictar.",
+        nivel: "info",
+      });
+      // Cargar los pesos y compilar los shaders son entre veinte segundos y un
+      // minuto de verdad. Acá se acorta para poder iterar, pero no a cero: el
+      // paso intermedio tiene que verse, que es la mitad de para qué existe.
+      setTimeout(() => publicar(LISTO), 5000);
+      return;
+    }
+    // `YaEstaCargando` y `AlReiniciar` no tocan el estado: sólo cuentan por qué
+    // el modelo recién bajado no es el que se está usando.
+    void emit("aviso", {
+      texto:
+        estado.estado === "cargando"
+          ? "Modelo descargado. Estoy terminando de cargar el motor; en cuanto diga «Listo» podés dictar. Este modelo se usa cuando reinicies MithFlow."
+          : "Modelo descargado. El cambio de modelo aplica cuando reinicies MithFlow.",
+      nivel: "info",
+    });
+  }
 
   /** Simula una descarga: unos tramos de progreso y el final. */
   function simularDescarga(clave: string) {
@@ -278,6 +340,7 @@ export function instalarBackendSimulado(escenario: Escenario) {
         terminado,
         error: null,
       });
+      if (terminado) trasLaDescarga();
     }, 350);
   }
 

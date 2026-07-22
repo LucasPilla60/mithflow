@@ -20,6 +20,16 @@
 //! Se baja a un `.part`, se verifica el hash del `.part` **completo**, y recién
 //! entonces se renombra al nombre final. Nunca existe un archivo con el nombre
 //! definitivo que no haya pasado la verificación.
+//!
+//! # La invariante de [`descargar`]
+//!
+//! **Un `Ok` significa que ese archivo verificó contra el hash compilado**, sin
+//! importar por cuál de las dos ramas salió. La rama corta —"ya estaba"— no
+//! alcanzaba con [`esta_descargado`], que sólo compara el tamaño: un `.gguf` del
+//! tamaño exacto y contenido distinto (una copia traída a mano, un archivo
+//! manipulado) daba un `Ok` indistinguible del de una descarga real, y quien lo
+//! recibe **arranca el motor sobre ese archivo**. Por eso la rama corta pasa por
+//! [`verificar_instalado`] antes de contestar.
 
 use sha2::{Digest, Sha256};
 use std::fmt::Write as _;
@@ -177,17 +187,57 @@ pub fn esta_descargado(modelo: Modelo) -> bool {
 /// Es la verificación que [`esta_descargado`] deliberadamente no hace: cuesta
 /// leer el archivo entero. Existe porque el spec permite copiar los modelos
 /// entre máquinas a mano, y una copia a mano nunca pasó por [`descargar`].
+///
+/// **Es la guarda de la rama corta de [`descargar`]** (ver la nota del módulo):
+/// sin ella, un archivo del tamaño correcto y contenido distinto se daría por
+/// instalado y el motor lo cargaría sin que nadie le mirara el hash nunca.
 pub fn verificar_instalado(modelo: Modelo) -> Result<(), String> {
-    let path = ruta(modelo)?;
-    let real = sha256_de_archivo(&path)?;
-    if real.eq_ignore_ascii_case(modelo.sha256()) {
+    verificar_archivo(&ruta(modelo)?, modelo.sha256())
+}
+
+/// El cuerpo de [`verificar_instalado`], sobre una ruta cualquiera: es lo que
+/// permite probar la comparación sin `%APPDATA%` y sin 1,5 GB de modelo real.
+fn verificar_archivo(path: &Path, sha256_esperado: &str) -> Result<(), String> {
+    let real = sha256_de_archivo(path)?;
+    if real.eq_ignore_ascii_case(sha256_esperado) {
         Ok(())
     } else {
         Err(format!(
-            "{} no coincide con el hash esperado (esperaba {}, obtuve {real})",
-            path.display(),
-            modelo.sha256()
+            "{} no coincide con el hash esperado (esperaba {sha256_esperado}, obtuve {real})",
+            path.display()
         ))
+    }
+}
+
+/// Le saca el nombre bueno a un modelo instalado que no verifica, y explica qué
+/// pasó y qué hacer.
+///
+/// **No se borra**: puede ser 1,5 GB que el usuario trajo a mano y quiera mirar,
+/// y esto no es un `.part` de la propia descarga sino un archivo que ya estaba.
+/// Pero tampoco puede quedarse llamándose como el modelo del catálogo: con el
+/// tamaño correcto, [`esta_descargado`] lo daría por instalado en el próximo
+/// arranque y el motor lo cargaría igual. Renombrarlo deja al usuario en el
+/// único estado honesto —no hay ningún modelo usable— y con el botón
+/// "Descargar" funcionando de nuevo, que es la salida.
+///
+/// Un `.invalido` anterior se pisa: ya estaba declarado inservible, y guardar
+/// varias copias de 1,5 GB de basura sería peor que perder la primera.
+fn apartar_el_invalido(destino: &Path, motivo: String) -> String {
+    let Some(nombre) = destino.file_name().and_then(|n| n.to_str()) else {
+        return format!("{motivo}; sacalo a mano, no pude ni leer su nombre");
+    };
+    let apartado = destino.with_file_name(format!("{nombre}.invalido"));
+    fs::remove_file(&apartado).ok();
+    match fs::rename(destino, &apartado) {
+        Ok(()) => format!(
+            "{motivo}. No lo voy a cargar: lo aparté como {} y podés volver a descargarlo.",
+            apartado.display()
+        ),
+        Err(e) => format!(
+            "{motivo}. No lo voy a cargar y ADEMÁS no pude apartarlo ({e}): borrá {} a mano \
+             y volvé a descargarlo.",
+            destino.display()
+        ),
     }
 }
 
@@ -291,7 +341,10 @@ fn cliente() -> Result<reqwest::blocking::Client, String> {
 /// que manda el servidor: si el archivo remoto cambió de tamaño, la descarga
 /// tiene que fallar, no reajustar la barra.
 ///
-/// Si el modelo ya está instalado no baja nada y devuelve su ruta.
+/// Si el modelo ya está instalado no baja nada, pero **antes de devolver su ruta
+/// le verifica el hash**: ver la invariante en la nota del módulo. Un archivo
+/// que no verifica se aparta y esto falla, porque un `Ok` de acá es lo que
+/// arranca el motor sobre ese `.gguf`.
 ///
 /// # Reanudable
 ///
@@ -305,6 +358,12 @@ where
     let total = modelo.bytes();
     let destino = ruta(modelo)?;
     if esta_descargado(modelo) {
+        // El tamaño ya coincide; el hash es lo que todavía no miró nadie. Sin
+        // esta línea, este `Ok` —indistinguible del de una descarga real— manda
+        // a cargar un archivo que nunca se verificó.
+        if let Err(motivo) = verificar_instalado(modelo) {
+            return Err(apartar_el_invalido(&destino, motivo));
+        }
         progreso(total, total);
         return Ok(destino);
     }
@@ -547,6 +606,58 @@ mod tests {
 
         assert!(!parcial.exists(), "el .part se renombra, no se copia");
         assert_eq!(fs::read(&destino).unwrap(), b"abc");
+    }
+
+    /// La rama corta de `descargar`: un archivo que YA está en el disco no se
+    /// da por bueno por medir lo que corresponde.
+    ///
+    /// Es el agujero que cerró este cambio. `esta_descargado` sólo compara el
+    /// tamaño, así que un `.gguf` del tamaño exacto y contenido distinto salía
+    /// por la rama corta con un `Ok` idéntico al de una descarga real — y ese
+    /// `Ok` es lo que arranca el motor sobre el archivo.
+    #[test]
+    fn un_modelo_instalado_que_no_verifica_no_pasa_por_bueno() {
+        let dir = carpeta_temporal("instalado_malo");
+        let instalado = dir.join("whisper-large-v3-turbo-Q4_K_M.gguf");
+        fs::write(&instalado, b"esto no es el modelo, pero pesa lo mismo").unwrap();
+
+        let error = verificar_archivo(&instalado, SHA_ABC)
+            .expect_err("el contenido no es 'abc': tiene que fallar");
+        assert!(
+            error.contains(SHA_ABC),
+            "el error debe decir qué hash esperaba: {error}"
+        );
+
+        // Y lo que la rama corta hace con ese error: el archivo pierde su
+        // nombre bueno, así que `esta_descargado` deja de darlo por instalado y
+        // el motor no lo puede cargar en el próximo arranque.
+        let aviso = apartar_el_invalido(&instalado, error);
+        assert!(
+            !instalado.exists(),
+            "el archivo que no verifica no puede seguir llamándose como el modelo"
+        );
+        assert!(
+            dir.join("whisper-large-v3-turbo-Q4_K_M.gguf.invalido").exists(),
+            "se apartó, no se borró: puede ser 1,5 GB que el usuario trajo a mano"
+        );
+        assert!(
+            aviso.contains("descargarlo"),
+            "el aviso tiene que decir cómo salir del paso: {aviso}"
+        );
+    }
+
+    /// Y el otro lado: el archivo instalado que sí es el del catálogo pasa sin
+    /// tocarse. Si esto fallara, la rama corta apartaría modelos buenos y cada
+    /// arranque terminaría bajando 1,5 GB de nuevo.
+    #[test]
+    fn un_modelo_instalado_que_verifica_se_acepta_y_no_se_toca() {
+        let dir = carpeta_temporal("instalado_bueno");
+        let instalado = dir.join("modelo.gguf");
+        fs::write(&instalado, b"abc").unwrap();
+
+        verificar_archivo(&instalado, SHA_ABC).expect("el hash coincide");
+        assert!(instalado.exists(), "un modelo bueno no se aparta");
+        assert!(!dir.join("modelo.gguf.invalido").exists());
     }
 
     /// El hash se compara sin distinguir mayúsculas porque `Get-FileHash` lo

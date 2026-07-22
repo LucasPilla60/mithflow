@@ -13,10 +13,10 @@
 //! La versión Python tenía ahí un bug real (dos funciones escribiendo el mismo
 //! buffer global); acá el compilador no deja escribirlo.
 
-use crate::ajustes::Ajustes;
+use crate::ajustes::{self, Ajustes};
 use crate::bandeja;
 use crate::estado::{Estado, EstadoCompartido, EstadoDto, FalloDelMotor};
-use crate::motor::AlMotor;
+use crate::motor::{self, AlMotor};
 use crate::sonidos::{Sonidos, Tono};
 use crate::{atajo, eventos};
 use mithflow_core::audio::Recorder;
@@ -61,6 +61,15 @@ pub enum Mensaje {
     /// todo lo demás: el director es el único que le habla al motor, así que no
     /// hay dos escritores compitiendo por esa cola.
     Ajustados(Box<Ajustes>),
+    /// Terminó bien la descarga de un modelo.
+    ///
+    /// El hilo de la descarga no decide nada: manda esto y sigue. **Quién sabe
+    /// si hay un motor corriendo es el director y nadie más**, y esa pregunta no
+    /// se puede contestar mirando un espejo desde otro hilo sin abrir una
+    /// carrera — dos descargas seguidas leerían las dos "no hay motor" y
+    /// lanzarían dos, con 1,5 GB de pesos cada uno. Acá hay una cola y un solo
+    /// lector: la segunda ve lo que dejó la primera.
+    ModeloDescargado,
 }
 
 /// El extremo del canal, para guardarlo en el estado de Tauri.
@@ -82,11 +91,26 @@ impl AlDirector {
             eprintln!("el director no está escuchando; se descarta el mensaje");
         }
     }
+
+    /// Un emisor suelto, para los hilos que arranca un comando y que viven más
+    /// que el `invoke` que los creó. Un `State` no se puede mover a otro hilo;
+    /// un `Sender` sí, y clonarlo no cuesta nada.
+    pub fn emisor(&self) -> Sender<Mensaje> {
+        self.0.clone()
+    }
 }
 
 /// Arranca el director en su propio hilo.
+///
+/// `al_director` es un emisor **hacia el propio director**: lo necesita para
+/// dárselo a un motor arrancado en caliente, que le va a contestar por ahí. Que
+/// el director retenga un emisor propio significa que su cola nunca queda
+/// desconectada sola, lo que en la práctica no cambia nada: el atajo y el estado
+/// de Tauri ya retienen los suyos durante toda la vida del proceso, y la
+/// aplicación termina por "Salir" en la bandeja.
 pub fn lanzar(
     app: AppHandle,
+    al_director: Sender<Mensaje>,
     cola: Receiver<Mensaje>,
     al_motor: Sender<AlMotor>,
     espejo: Arc<EstadoCompartido>,
@@ -98,6 +122,7 @@ pub fn lanzar(
         .spawn(move || {
             Director {
                 app,
+                al_director,
                 estado: Estado::Cargando,
                 pausado: false,
                 grabadora: None,
@@ -115,6 +140,8 @@ pub fn lanzar(
 
 struct Director {
     app: AppHandle,
+    /// Emisor hacia sí mismo, para el motor que se arranca en caliente.
+    al_director: Sender<Mensaje>,
     estado: Estado,
     pausado: bool,
     /// Existe sólo mientras se graba. Que sea `Option` y no un campo siempre
@@ -161,9 +188,7 @@ impl Director {
             Mensaje::AlternarPausa => self.fijar_pausa(!self.pausado),
             Mensaje::MotorListo(Ok(resumen)) => {
                 eprintln!("{resumen}");
-                // Si el motor terminó mientras algo ya había fallado (el atajo,
-                // por ejemplo), no se pisa ese error con un "Listo" falso.
-                if matches!(self.estado, Estado::Cargando) {
+                if pasa_a_listo_cuando_el_motor_avisa(&self.estado) {
                     self.cambiar(Estado::Listo);
                 }
             }
@@ -178,6 +203,52 @@ impl Director {
                 self.termino_de_transcribir(*salida, entrada)
             }
             Mensaje::Ajustados(nuevos) => self.aplicar_ajustes(nuevos),
+            Mensaje::ModeloDescargado => self.modelo_descargado(),
+        }
+    }
+
+    /// Se terminó de bajar un modelo. Acá se cierra el lazo que antes obligaba a
+    /// reiniciar la aplicación recién instalada.
+    ///
+    /// La decisión la toma [`tras_una_descarga`], que sólo mira el estado; lo que
+    /// se hace con ella es lo único que necesita al director.
+    fn modelo_descargado(&mut self) {
+        let decidido = tras_una_descarga(&self.estado);
+        eprintln!("modelo descargado con el estado en {:?}: {decidido:?}", self.estado);
+        match decidido {
+            TrasLaDescarga::Lanzar => self.lanzar_el_motor(),
+            // Los otros dos no tocan nada: sólo cuentan por qué. Se nombran uno
+            // por uno —nada de comodín— para que una variante nueva de
+            // `TrasLaDescarga` no caiga acá en silencio.
+            TrasLaDescarga::YaEstaCargando | TrasLaDescarga::AlReiniciar => {
+                eventos::aviso(&self.app, decidido.aviso(), "info")
+            }
+        }
+    }
+
+    /// Arranca el motor sin reiniciar la aplicación.
+    ///
+    /// El estado pasa a [`estado_al_lanzar_en_caliente`] **antes** de que el
+    /// modelo esté en memoria, y eso es a propósito: cargar los pesos y compilar
+    /// los shaders son entre veinte segundos y un minuto la primera vez en la
+    /// máquina. Sin publicar el paso intermedio, el usuario que acaba de bajar el
+    /// modelo se queda mirando una pantalla que no cambia y no tiene forma de
+    /// saber si la app está haciendo algo.
+    ///
+    /// Publicarlo además es lo que cierra la puerta a un segundo lanzamiento: la
+    /// descarga siguiente ya no ve `SinModelo` (ver [`tras_una_descarga`]).
+    fn lanzar_el_motor(&mut self) {
+        let cfg = ajustes::cargar(&self.app);
+        match motor::resolver_y_lanzar(&self.app, &self.al_director, &cfg) {
+            Ok(al_motor) => {
+                self.al_motor = al_motor;
+                self.cambiar(estado_al_lanzar_en_caliente());
+                eventos::aviso(&self.app, TrasLaDescarga::Lanzar.aviso(), "info");
+            }
+            // Bajar el modelo no alcanzó: se cuenta como cualquier otro motor que
+            // no arranca, con la misma regla de siempre —lo que falta se dice en
+            // ámbar, lo que se rompió en rojo— y el canal viejo queda como estaba.
+            Err(fallo) => self.motor_no_arranca(fallo),
         }
     }
 
@@ -387,7 +458,15 @@ impl Director {
 fn respuesta_al_atajo(estado: &Estado) -> Option<String> {
     match estado {
         Estado::Listo | Estado::Grabando => None,
-        Estado::Cargando => Some("Todavía estoy preparando el motor; dame unos segundos.".into()),
+        // La misma cifra que dicen el asistente y la documentación: cargar los
+        // pesos y compilar los shaders son entre veinte segundos y un minuto la
+        // primera vez en cada máquina. "Unos segundos" prometía menos de lo que
+        // tarda, y quien apreta la tecla a los diez segundos cree que se colgó.
+        Estado::Cargando => Some(
+            "Todavía estoy preparando el motor: la primera vez tarda entre veinte segundos y \
+             un minuto."
+                .into(),
+        ),
         Estado::Transcribiendo => Some("Estoy transcribiendo el dictado anterior.".into()),
         // Falta un paso, y se nombra el paso. El motivo guardado dice lo mismo
         // pero mirando hacia atrás ("no hay ningún modelo descargado"); al que
@@ -396,6 +475,96 @@ fn respuesta_al_atajo(estado: &Estado) -> Option<String> {
             Some("Todavía no descargaste el modelo. Abrí Ajustes y bajá uno para dictar.".into())
         }
         Estado::Error(motivo) => Some(motivo.clone()),
+    }
+}
+
+/// ¿Un motor que terminó de cargar puede publicar `Listo` desde este estado?
+///
+/// **Sólo desde `Cargando`.** Si mientras el motor cargaba algo falló —el atajo,
+/// por ejemplo— pisar esa falla con un "Listo" la escondería. Y es también la
+/// puerta por la que sale el arranque en caliente: [`Director::lanzar_el_motor`]
+/// publica `Cargando` justamente para poder cruzarla, así que las dos mitades
+/// tienen que moverse juntas o el motor terminaría de cargar y la interfaz se
+/// quedaría en "Cargando…" para siempre.
+fn pasa_a_listo_cuando_el_motor_avisa(estado: &Estado) -> bool {
+    matches!(estado, Estado::Cargando)
+}
+
+/// El estado que [`Director::lanzar_el_motor`] publica apenas el motor arranca
+/// en caliente.
+///
+/// Es una función y no un literal adentro de `lanzar_el_motor` porque es **el
+/// eslabón del que cuelga todo lo demás** y los tests tienen que poder
+/// aseverarlo en vez de volver a escribirlo a mano: que sea `Cargando` es lo
+/// que cierra la puerta al segundo motor de la descarga siguiente
+/// ([`tras_una_descarga`]) y, a la vez, lo único que después deja pasar el
+/// `Listo` del motor ([`pasa_a_listo_cuando_el_motor_avisa`]). Un test que
+/// escriba `Estado::Cargando` de su lado sigue verde aunque acá cambie, que es
+/// exactamente cómo se lanzarían dos motores de 1,5 GB sin que nadie se entere.
+fn estado_al_lanzar_en_caliente() -> Estado {
+    Estado::Cargando
+}
+
+/// Qué corresponde hacer cuando una descarga termina bien.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TrasLaDescarga {
+    /// No hay motor y no lo hubo nunca: se lanza ahora, sin reiniciar. Es el
+    /// caso del primer arranque, el que este arreglo vino a cerrar.
+    Lanzar,
+    /// Ya hay un motor cargándose —el del arranque, o el de la descarga
+    /// anterior—. Lanzar otro serían dos modelos de hasta 1,5 GB compilando
+    /// shaders al mismo tiempo, y el que sobrevive sería cualquiera de los dos.
+    YaEstaCargando,
+    /// El motor ya está cargado, o hay una falla que una descarga no arregla.
+    /// Reemplazar el modelo en caliente son 1,5 GB y ~2 s de pausa en medio del
+    /// trabajo del usuario: el cambio queda para el próximo arranque, que es lo
+    /// que esta app viene haciendo desde siempre con el cambio de modelo.
+    AlReiniciar,
+}
+
+impl TrasLaDescarga {
+    /// Lo que se le cuenta al usuario.
+    ///
+    /// **Ninguno de los tres puede decir que no hay ningún modelo descargado**:
+    /// se acaba de bajar uno, y esa contradicción —la app pidiendo lo que el
+    /// usuario ya hizo— es el defecto que se está arreglando.
+    ///
+    /// Y la simetría, que es igual de importante: los dos casos en los que el
+    /// modelo recién bajado NO es el que se va a usar ahora **sí** dicen que
+    /// hace falta reiniciar. `YaEstaCargando` entra ahí porque el motor está
+    /// cargando otro archivo: no se puede estar bajando el que ya se está
+    /// cargando, así que callarlo sería la misma mentira al revés.
+    fn aviso(self) -> &'static str {
+        match self {
+            TrasLaDescarga::Lanzar => {
+                "Modelo descargado. Estoy cargando el motor; en cuanto diga «Listo» podés dictar."
+            }
+            TrasLaDescarga::YaEstaCargando => {
+                "Modelo descargado. Estoy terminando de cargar el motor; en cuanto diga «Listo» podés dictar. Este modelo se usa cuando reinicies MithFlow."
+            }
+            TrasLaDescarga::AlReiniciar => {
+                "Modelo descargado. El cambio de modelo aplica cuando reinicies MithFlow."
+            }
+        }
+    }
+}
+
+/// La regla, en un solo lugar y sin tocar nada: **el motor se lanza si y sólo si
+/// no hay ninguno**. Es una función suelta —como [`respuesta_al_atajo`]— para
+/// poder probarla sin levantar una aplicación de Tauri, que es justo lo que hace
+/// falta acá: la carrera de dos descargas seguidas se decide en este `match`.
+fn tras_una_descarga(estado: &Estado) -> TrasLaDescarga {
+    match estado {
+        // Lo único que impide dictar es que falte el modelo, y ya no falta.
+        Estado::SinModelo(_) => TrasLaDescarga::Lanzar,
+        Estado::Cargando => TrasLaDescarga::YaEstaCargando,
+        // `Error` entra acá y no en `Lanzar` a propósito: puede ser el atajo que
+        // no se enganchó o el historial que no se puede escribir, y ninguno de
+        // los dos se arregla con un `.gguf` nuevo. Arrancar un motor encima
+        // taparía la falla con un "Listo" que no sería cierto.
+        Estado::Listo | Estado::Grabando | Estado::Transcribiendo | Estado::Error(_) => {
+            TrasLaDescarga::AlReiniciar
+        }
     }
 }
 
@@ -469,5 +638,197 @@ mod tests {
             respuesta_al_atajo(&Estado::Error(motivo.into())).as_deref(),
             Some(motivo)
         );
+    }
+
+    /// El defecto que este arreglo cierra: la app se instala sin modelo, el
+    /// usuario baja uno **desde la propia app** y hasta acá había que cerrarla y
+    /// volver a abrirla para poder dictar. Con el motor ausente, una descarga
+    /// que termina bien tiene que lanzarlo.
+    #[test]
+    fn una_descarga_con_el_motor_ausente_lo_lanza() {
+        let sin_modelo = Estado::SinModelo(
+            "todavía no hay ningún modelo descargado. Bajá uno desde Ajustes para poder dictar."
+                .into(),
+        );
+        assert_eq!(tras_una_descarga(&sin_modelo), TrasLaDescarga::Lanzar);
+    }
+
+    /// Y la otra mitad, que es la que no se puede aflojar: con el motor ya
+    /// cargado NO se relanza. Cambiar el modelo en caliente son 1,5 GB y una
+    /// pausa en medio del trabajo del usuario; eso sigue siendo cosa del próximo
+    /// arranque.
+    #[test]
+    fn una_descarga_con_el_motor_corriendo_no_lo_relanza() {
+        for estado in [Estado::Listo, Estado::Grabando, Estado::Transcribiendo] {
+            assert_eq!(
+                tras_una_descarga(&estado),
+                TrasLaDescarga::AlReiniciar,
+                "{estado:?} tiene un motor cargado: relanzarlo sería reemplazarlo en caliente"
+            );
+        }
+    }
+
+    /// La carrera del asistente: baja el modelo de medición y después el
+    /// recomendado, uno atrás del otro. La primera descarga lanza el motor y
+    /// publica `Cargando`; la segunda ya no puede ver `SinModelo`, así que no
+    /// arranca un segundo motor con otros 1,5 GB de pesos.
+    ///
+    /// El eslabón del medio **no se escribe a mano acá**: sale de
+    /// [`estado_al_lanzar_en_caliente`], que es el mismo valor que publica
+    /// `lanzar_el_motor`. Copiándolo, este test seguiría verde aunque el
+    /// director dejara de publicarlo — y se lanzarían dos motores.
+    #[test]
+    fn dos_descargas_seguidas_no_lanzan_dos_motores() {
+        let sin_modelo = Estado::SinModelo("todavía no hay ningún modelo".into());
+        assert_eq!(tras_una_descarga(&sin_modelo), TrasLaDescarga::Lanzar);
+
+        let tras_lanzar = estado_al_lanzar_en_caliente();
+        assert_eq!(
+            tras_una_descarga(&tras_lanzar),
+            TrasLaDescarga::YaEstaCargando,
+            "el estado que deja el primer lanzamiento tiene que frenar al segundo"
+        );
+        assert!(
+            pasa_a_listo_cuando_el_motor_avisa(&tras_lanzar),
+            "y tiene que ser el mismo desde el que el motor puede publicar «Listo», \
+             o la interfaz se queda en «Cargando…» para siempre"
+        );
+    }
+
+    /// La invariante que sostiene a las dos mitades: **no puede existir un hilo
+    /// de motor vivo con el estado en `SinModelo`**.
+    ///
+    /// Si existiera, la descarga siguiente vería `SinModelo`, lanzaría otro
+    /// motor y habría dos cargando el mismo modelo. Se comprueba por los dos
+    /// lados: ningún estado que implique un motor vivo lleva a `Lanzar`, y el
+    /// único que sí lleva deja de ser `SinModelo` en el mismo acto de lanzarlo.
+    ///
+    /// `Error` queda afuera de la lista a propósito: puede tener un motor vivo
+    /// (el atajo se rompió con el modelo ya cargado) o no tenerlo (el `.gguf`
+    /// está cortado), y por eso no lanza nunca — es la rama conservadora.
+    #[test]
+    fn ningun_motor_vivo_convive_con_el_estado_sin_modelo() {
+        for con_motor in [
+            Estado::Cargando,
+            Estado::Listo,
+            Estado::Grabando,
+            Estado::Transcribiendo,
+        ] {
+            assert_ne!(
+                con_motor.clave(),
+                Estado::SinModelo(String::new()).clave(),
+                "{con_motor:?} implica un motor vivo: no puede verse como «falta el modelo»"
+            );
+            assert_ne!(
+                tras_una_descarga(&con_motor),
+                TrasLaDescarga::Lanzar,
+                "{con_motor:?} ya tiene motor: lanzar otro serían dos modelos en memoria"
+            );
+        }
+
+        assert_eq!(
+            tras_una_descarga(&Estado::SinModelo("no hay modelo".into())),
+            TrasLaDescarga::Lanzar,
+            "el único estado sin motor es el único que lo lanza"
+        );
+        assert_ne!(
+            estado_al_lanzar_en_caliente().clave(),
+            Estado::SinModelo(String::new()).clave(),
+            "apenas se lanza el motor, el estado deja de decir que no hay ninguno"
+        );
+    }
+
+    /// Una falla real no se tapa arrancando un motor encima: el atajo que no se
+    /// enganchó o el historial que no se puede escribir siguen ahí después de
+    /// bajar un `.gguf`.
+    #[test]
+    fn una_falla_real_no_se_arregla_con_una_descarga() {
+        assert_eq!(
+            tras_una_descarga(&Estado::Error("no pude enganchar el atajo".into())),
+            TrasLaDescarga::AlReiniciar
+        );
+    }
+
+    /// El estado transita `SinModelo` → `Cargando` → `Listo`, y las tres partes
+    /// tienen que encajar: `Cargando` es distinto de `SinModelo` (si no, la
+    /// interfaz y la bandeja no mostrarían el cambio y la pantalla se vería
+    /// muerta durante 40 s) y es el único estado desde el que el motor que
+    /// termina de cargar puede publicar `Listo`.
+    #[test]
+    fn el_estado_transita_de_sin_modelo_a_cargando_y_de_ahi_a_listo() {
+        let sin_modelo = Estado::SinModelo("todavía no hay ningún modelo".into());
+        assert_eq!(tras_una_descarga(&sin_modelo), TrasLaDescarga::Lanzar);
+
+        let cargando = estado_al_lanzar_en_caliente();
+        assert_ne!(
+            cargando.clave(),
+            sin_modelo.clave(),
+            "sin un estado intermedio visible, el usuario no ve que está pasando algo"
+        );
+        assert!(!cargando.es_falla(), "cargar el motor no es una falla");
+
+        assert!(pasa_a_listo_cuando_el_motor_avisa(&cargando));
+        assert!(
+            !pasa_a_listo_cuando_el_motor_avisa(&Estado::Error("el atajo se rompió".into())),
+            "un 'Listo' no puede pisar una falla ya publicada"
+        );
+        assert!(!pasa_a_listo_cuando_el_motor_avisa(&sin_modelo));
+    }
+
+    /// **Ningún** aviso de descarga puede volver a decir que no hay modelo: se
+    /// acaba de bajar uno. Ésa era, literalmente, la mentira del defecto.
+    #[test]
+    fn ningun_aviso_de_descarga_niega_el_modelo_recien_bajado() {
+        for caso in [
+            TrasLaDescarga::Lanzar,
+            TrasLaDescarga::YaEstaCargando,
+            TrasLaDescarga::AlReiniciar,
+        ] {
+            let texto = caso.aviso().to_lowercase();
+            assert!(
+                texto.contains("modelo descargado"),
+                "{caso:?} tiene que reconocer la descarga: {texto}"
+            );
+            assert!(
+                !texto.contains("no hay ningún modelo") && !texto.contains("bajá uno"),
+                "{caso:?} le pide al usuario lo que acaba de hacer: {texto}"
+            );
+        }
+    }
+
+    /// Sólo el caso que de verdad lo resuelve deja de pedir reiniciar. Mandar a
+    /// reiniciar una app recién instalada cuando el motor está arrancando solo
+    /// es la fricción que este arreglo vino a sacar; los otros dos bajaron un
+    /// modelo que NO es el que se va a cargar ahora, y callar eso sería la
+    /// mentira simétrica.
+    #[test]
+    fn solo_el_lanzamiento_en_caliente_deja_de_pedir_reiniciar() {
+        let lanzar = TrasLaDescarga::Lanzar.aviso().to_lowercase();
+        assert!(
+            !lanzar.contains("reinici"),
+            "el motor arranca solo, no hay nada que reiniciar: {lanzar}"
+        );
+
+        for caso in [TrasLaDescarga::YaEstaCargando, TrasLaDescarga::AlReiniciar] {
+            assert!(
+                caso.aviso().to_lowercase().contains("reinici"),
+                "{caso:?} bajó un modelo que no es el que se está cargando: {}",
+                caso.aviso()
+            );
+        }
+    }
+
+    /// Los dos avisos que dejan al usuario esperando tienen que decirle qué está
+    /// pasando y cuándo termina. Un "Modelo descargado." a secas mientras el
+    /// motor tarda 40 s se ve igual que una app colgada.
+    #[test]
+    fn los_avisos_que_hacen_esperar_dicen_hasta_cuando() {
+        for caso in [TrasLaDescarga::Lanzar, TrasLaDescarga::YaEstaCargando] {
+            let texto = caso.aviso().to_lowercase();
+            assert!(
+                texto.contains("el motor") && texto.contains("«listo»"),
+                "{caso:?} tiene que decir qué está pasando y cuándo se va a poder dictar: {texto}"
+            );
+        }
     }
 }
