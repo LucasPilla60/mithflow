@@ -1,0 +1,1115 @@
+/**
+ * La hoja de estilos de MithFlow.
+ *
+ * Oscuro y sobrio a propósito: esta ventana se abre para mirar un número y
+ * cerrarla, no para admirarla. Todo el color que hay está reservado para decir
+ * algo (el estado del motor, un error, el valor de una barra); el resto es
+ * gris. Por eso no hay gradientes ni tarjetas anidadas: cada borde que se dibuja
+ * es un borde que compite con el dato.
+ *
+ * La CSP de `tauri.conf.json` permite `style-src 'unsafe-inline'`, que es lo que
+ * habilita los `style={{ height: ... }}` de las barras de los gráficos; los
+ * scripts en cambio son sólo `'self'`, así que nada de esto puede inyectar
+ * código.
+ */
+
+:root {
+  /* Superficies, del fondo hacia adelante. */
+  --fondo: #0d1117;
+  --panel: #141a22;
+  --panel-alto: #1a212b;
+  --borde: #242d3a;
+  --borde-suave: #1c242f;
+
+  /* Texto. */
+  --texto: #e6edf3;
+  --texto-medio: #a9b4c4;
+  --texto-tenue: #7d8899;
+
+  /* Semánticos. Cada uno dice una cosa y sólo esa. */
+  --acento: #22c3a6;
+  --acento-tenue: #1a8f7b;
+  --rojo: #f0564a;
+  --ambar: #d9a441;
+  --verde: #3fb950;
+
+  --radio: 10px;
+  --radio-chico: 6px;
+
+  color-scheme: dark;
+  font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--fondo);
+  color: var(--texto);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* El texto de la interfaz no se selecciona: es una app, no una página. El
+   contenido del historial sí, que es lo único que alguien querría copiar. */
+body {
+  user-select: none;
+}
+
+.seleccionable,
+input,
+textarea {
+  user-select: text;
+}
+
+h1,
+h2,
+h3 {
+  margin: 0;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+button {
+  font: inherit;
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+/* -------------------------------------------------------------- estructura */
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+/* La franja de arriba cambia de color con el estado: es lo primero que se ve al
+   traer la ventana al frente, incluso de reojo. */
+.app::before {
+  content: "";
+  display: block;
+  height: 3px;
+  background: var(--borde);
+  transition: background 160ms ease;
+  flex: none;
+}
+
+.app[data-estado="listo"]::before {
+  background: var(--acento-tenue);
+}
+
+.app[data-estado="grabando"]::before {
+  background: var(--rojo);
+}
+
+.app[data-estado="transcribiendo"]::before {
+  background: var(--ambar);
+}
+
+.app[data-estado="error"]::before {
+  background: var(--rojo);
+}
+
+.encabezado {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--borde-suave);
+  flex: none;
+}
+
+.marca {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.marca h1 {
+  font-size: 15px;
+}
+
+.marca .version {
+  font-size: 11px;
+  color: var(--texto-tenue);
+  font-variant-numeric: tabular-nums;
+}
+
+.encabezado .espacio {
+  flex: 1;
+}
+
+.pestanas {
+  display: flex;
+  gap: 2px;
+  background: var(--panel);
+  border: 1px solid var(--borde-suave);
+  border-radius: var(--radio-chico);
+  padding: 2px;
+}
+
+.pestanas button {
+  border: 0;
+  background: transparent;
+  color: var(--texto-tenue);
+  padding: 5px 14px;
+  border-radius: 4px;
+  font-size: 13px;
+  transition: color 120ms ease, background 120ms ease;
+}
+
+.pestanas button:hover {
+  color: var(--texto-medio);
+}
+
+.pestanas button[aria-current="page"] {
+  background: var(--panel-alto);
+  color: var(--texto);
+}
+
+.contenido {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px;
+}
+
+.contenido > * + * {
+  margin-top: 18px;
+}
+
+/* ------------------------------------------------------------ estado motor */
+
+.estado {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 12px 5px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--borde);
+  background: var(--panel);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.estado .punto {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--texto-tenue);
+  flex: none;
+}
+
+.estado .etiqueta {
+  font-weight: 600;
+}
+
+.estado[data-estado="listo"] .punto {
+  background: var(--acento);
+}
+
+.estado[data-estado="cargando"] .punto,
+.estado[data-estado="transcribiendo"] .punto {
+  background: var(--ambar);
+  animation: latido 1s ease-in-out infinite;
+}
+
+.estado[data-estado="error"] .punto {
+  background: var(--rojo);
+}
+
+/* Grabando: el único estado que se anuncia con color de fondo. Es el que tiene
+   que verse sin buscarlo. */
+.estado[data-estado="grabando"] {
+  border-color: var(--rojo);
+  background: rgba(240, 86, 74, 0.14);
+  color: #ffd9d5;
+}
+
+.estado[data-estado="grabando"] .punto {
+  background: var(--rojo);
+  animation: pulso 1.1s ease-in-out infinite;
+}
+
+.estado.pausado {
+  opacity: 0.75;
+}
+
+.estado .pausa {
+  font-size: 11px;
+  color: var(--texto-tenue);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+@keyframes pulso {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(240, 86, 74, 0.55);
+  }
+  70% {
+    box-shadow: 0 0 0 6px rgba(240, 86, 74, 0);
+  }
+}
+
+@keyframes latido {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+/* Quien pidió menos movimiento no necesita ver latir un punto. */
+@media (prefers-reduced-motion: reduce) {
+  .estado .punto {
+    animation: none !important;
+  }
+}
+
+.detalle-estado {
+  margin: 0;
+  padding: 10px 14px;
+  border: 1px solid rgba(240, 86, 74, 0.35);
+  background: rgba(240, 86, 74, 0.08);
+  border-radius: var(--radio);
+  color: #f6c7c2;
+  font-size: 13px;
+}
+
+/* ---------------------------------------------------------------- botones */
+
+.boton {
+  border: 1px solid var(--borde);
+  background: var(--panel-alto);
+  color: var(--texto);
+  padding: 6px 14px;
+  border-radius: var(--radio-chico);
+  font-size: 13px;
+  transition: border-color 120ms ease, background 120ms ease;
+}
+
+.boton:hover:not(:disabled) {
+  border-color: #33404f;
+  background: #202936;
+}
+
+.boton.primario {
+  background: var(--acento);
+  border-color: var(--acento);
+  color: #06231d;
+  font-weight: 600;
+}
+
+.boton.primario:hover:not(:disabled) {
+  background: #2ad6b6;
+  border-color: #2ad6b6;
+}
+
+.boton.peligro {
+  border-color: rgba(240, 86, 74, 0.5);
+  color: #ff9d94;
+  background: transparent;
+}
+
+.boton.peligro:hover:not(:disabled) {
+  background: rgba(240, 86, 74, 0.12);
+}
+
+.boton.plano {
+  background: transparent;
+  border-color: transparent;
+  color: var(--texto-tenue);
+  padding: 4px 8px;
+}
+
+.boton.plano:hover:not(:disabled) {
+  color: var(--texto);
+  background: var(--panel-alto);
+}
+
+.boton.chico {
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
+/* ----------------------------------------------------------------- avisos */
+
+.avisos {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 20;
+  max-width: 380px;
+}
+
+.avisos li {
+  list-style: none;
+  padding: 9px 12px;
+  border-radius: var(--radio-chico);
+  border: 1px solid var(--borde);
+  background: var(--panel-alto);
+  font-size: 13px;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+}
+
+.avisos li.error {
+  border-color: rgba(240, 86, 74, 0.55);
+  color: #ffb3ac;
+}
+
+.avisos ul {
+  margin: 0;
+  padding: 0;
+}
+
+/* ---------------------------------------------------------------- paneles */
+
+.panel {
+  border: 1px solid var(--borde-suave);
+  background: var(--panel);
+  border-radius: var(--radio);
+  padding: 16px;
+}
+
+.panel > header {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.panel > header h2 {
+  font-size: 13px;
+  color: var(--texto-medio);
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+}
+
+.panel > header .apunte {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--texto-tenue);
+  font-variant-numeric: tabular-nums;
+}
+
+.vacio {
+  color: var(--texto-tenue);
+  font-size: 13px;
+  text-align: center;
+  padding: 28px 12px;
+}
+
+/* --------------------------------------------------------------- métricas */
+
+.metricas {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+}
+
+.metrica {
+  border: 1px solid var(--borde-suave);
+  background: var(--panel);
+  border-radius: var(--radio);
+  padding: 12px 14px;
+}
+
+.metrica .titulo {
+  font-size: 11px;
+  color: var(--texto-tenue);
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+}
+
+.metrica .valor {
+  font-size: 24px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  margin-top: 4px;
+  line-height: 1.2;
+}
+
+.metrica .valor .unidad {
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--texto-tenue);
+  margin-left: 3px;
+}
+
+.metrica .delta {
+  font-size: 12px;
+  color: var(--acento);
+  margin-top: 2px;
+  font-variant-numeric: tabular-nums;
+}
+
+.metrica .nota {
+  font-size: 11px;
+  color: var(--texto-tenue);
+  margin-top: 2px;
+}
+
+/* --------------------------------------------------------------- gráficos */
+
+.graficos {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 14px;
+}
+
+.grafico {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 132px;
+  border-bottom: 1px solid var(--borde);
+  padding-bottom: 1px;
+}
+
+.grafico .columna {
+  flex: 1;
+  height: 100%;
+  display: flex;
+  align-items: flex-end;
+  min-width: 0;
+}
+
+.grafico .barra {
+  width: 100%;
+  min-height: 2px;
+  background: var(--acento-tenue);
+  border-radius: 3px 3px 0 0;
+  transition: background 120ms ease;
+}
+
+.grafico .columna:hover .barra {
+  background: var(--acento);
+}
+
+.grafico .barra.cero {
+  background: var(--borde);
+}
+
+.eje-x {
+  display: flex;
+  gap: 2px;
+  margin-top: 6px;
+}
+
+/* Las etiquetas se dibujan cada N barras y se dejan DESBORDAR sobre las vecinas
+   vacías: recortarlas a lo ancho de una barra dejaría "22/" en vez de "22/06",
+   que es peor que no poner nada. */
+.eje-x span {
+  flex: 1;
+  min-width: 0;
+  text-align: center;
+  font-size: 10px;
+  color: var(--texto-tenue);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: visible;
+}
+
+/* --------------------------------------------------------------- historial */
+
+.buscador {
+  width: 100%;
+  padding: 7px 11px;
+  border-radius: var(--radio-chico);
+  border: 1px solid var(--borde);
+  background: var(--fondo);
+  color: var(--texto);
+  font: inherit;
+  font-size: 13px;
+}
+
+.buscador:focus,
+.campo input:focus,
+.campo select:focus,
+.campo textarea:focus {
+  outline: none;
+  border-color: var(--acento-tenue);
+}
+
+.historial {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+}
+
+.historial li {
+  padding: 10px 0;
+  border-top: 1px solid var(--borde-suave);
+}
+
+.historial li:first-child {
+  border-top: 0;
+}
+
+.historial .cabecera {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--texto-tenue);
+  font-variant-numeric: tabular-nums;
+}
+
+.historial .texto {
+  margin: 3px 0 0;
+  font-size: 13px;
+  color: var(--texto);
+  overflow-wrap: anywhere;
+}
+
+.historial .texto.ausente {
+  color: var(--texto-tenue);
+  font-style: italic;
+}
+
+.historial .crudo {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--texto-tenue);
+  border-left: 2px solid var(--borde);
+  padding-left: 10px;
+  overflow-wrap: anywhere;
+}
+
+.crudo-caja summary {
+  margin-top: 5px;
+  font-size: 11px;
+  color: var(--texto-tenue);
+  cursor: pointer;
+  width: fit-content;
+}
+
+.crudo-caja summary:hover {
+  color: var(--texto-medio);
+}
+
+.pie-historial {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 12px;
+  font-size: 12px;
+  color: var(--texto-tenue);
+}
+
+.etiqueta-modo {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 4px;
+  border: 1px solid var(--borde);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--texto-tenue);
+}
+
+/* ---------------------------------------------------------------- ajustes */
+
+.seccion {
+  border: 1px solid var(--borde-suave);
+  background: var(--panel);
+  border-radius: var(--radio);
+  padding: 16px;
+}
+
+.seccion > h2 {
+  font-size: 13px;
+  color: var(--texto-medio);
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  margin-bottom: 14px;
+}
+
+.campo {
+  display: grid;
+  grid-template-columns: 200px 1fr;
+  gap: 12px 16px;
+  align-items: center;
+  padding: 9px 0;
+  border-top: 1px solid var(--borde-suave);
+}
+
+.seccion .campo:first-of-type {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.campo > .rotulo {
+  font-size: 13px;
+}
+
+.campo > .rotulo .ayuda {
+  display: block;
+  font-size: 11px;
+  color: var(--texto-tenue);
+  margin-top: 2px;
+  line-height: 1.35;
+}
+
+.campo select,
+.campo input[type="text"],
+.campo textarea {
+  width: 100%;
+  padding: 6px 10px;
+  border-radius: var(--radio-chico);
+  border: 1px solid var(--borde);
+  background: var(--fondo);
+  color: var(--texto);
+  font: inherit;
+  font-size: 13px;
+}
+
+.campo textarea {
+  resize: vertical;
+  min-height: 68px;
+  line-height: 1.5;
+}
+
+/* Un desplegable de ancho completo para elegir "F9" es una caja vacía con una
+   palabra en un rincón. Se acota a lo que mide su contenido más largo. */
+.campo select {
+  cursor: pointer;
+  max-width: 220px;
+}
+
+/* En una fila con botón al lado, el campo de texto se estira y el botón queda
+   pegado; sin esto el botón cae solo a la línea de abajo. */
+.campo .control input[type="text"] {
+  flex: 1;
+  width: auto;
+  min-width: 160px;
+}
+
+.campo .control {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.campo .cifra {
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  color: var(--texto-medio);
+  min-width: 58px;
+}
+
+@media (max-width: 640px) {
+  .campo {
+    grid-template-columns: 1fr;
+  }
+}
+
+input[type="range"] {
+  flex: 1;
+  min-width: 120px;
+  max-width: 320px;
+  accent-color: var(--acento);
+  background: transparent;
+}
+
+/* Interruptor. */
+.interruptor {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.interruptor input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.interruptor .riel {
+  width: 34px;
+  height: 19px;
+  border-radius: 999px;
+  background: var(--panel-alto);
+  border: 1px solid var(--borde);
+  position: relative;
+  transition: background 140ms ease, border-color 140ms ease;
+  flex: none;
+}
+
+.interruptor .riel::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: var(--texto-tenue);
+  transition: transform 140ms ease, background 140ms ease;
+}
+
+.interruptor input:checked + .riel {
+  background: rgba(34, 195, 166, 0.22);
+  border-color: var(--acento-tenue);
+}
+
+.interruptor input:checked + .riel::after {
+  transform: translateX(15px);
+  background: var(--acento);
+}
+
+.interruptor input:focus-visible + .riel {
+  border-color: var(--acento);
+}
+
+.interruptor input:disabled + .riel {
+  opacity: 0.45;
+}
+
+/* Segmentado (modo de limpieza). */
+.segmentado {
+  display: inline-flex;
+  border: 1px solid var(--borde);
+  border-radius: var(--radio-chico);
+  overflow: hidden;
+}
+
+.segmentado button {
+  border: 0;
+  background: transparent;
+  color: var(--texto-tenue);
+  padding: 5px 14px;
+  font-size: 13px;
+}
+
+.segmentado button[aria-pressed="true"] {
+  background: var(--panel-alto);
+  color: var(--texto);
+}
+
+/* Muletillas. */
+.fichas {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.ficha {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 4px 2px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--borde);
+  background: var(--panel-alto);
+  font-size: 12px;
+}
+
+.ficha button {
+  border: 0;
+  background: transparent;
+  color: var(--texto-tenue);
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: 50%;
+  font-size: 13px;
+}
+
+.ficha button:hover {
+  color: var(--rojo);
+}
+
+/* Barra de guardado, pegada abajo. */
+.barra-guardar {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  border: 1px solid var(--borde);
+  border-radius: var(--radio);
+  background: var(--panel-alto);
+  box-shadow: 0 -6px 20px rgba(0, 0, 0, 0.35);
+}
+
+.barra-guardar .mensaje {
+  font-size: 13px;
+  color: var(--texto-medio);
+}
+
+.barra-guardar .espacio {
+  flex: 1;
+}
+
+/* --------------------------------------------------------------- modelos */
+
+.modelos {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* La fila lleva el botón de selección y, aparte, el de descargar: anidar un
+   botón dentro de otro no es HTML válido y el lector de pantalla no sabría cuál
+   se activó. */
+.fila-modelo {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.modelo {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--borde-suave);
+  border-radius: var(--radio-chico);
+  background: var(--fondo);
+  text-align: left;
+  width: 100%;
+  color: inherit;
+}
+
+button.modelo {
+  transition: border-color 120ms ease;
+}
+
+button.modelo:hover:not(:disabled) {
+  border-color: var(--borde);
+}
+
+.modelo[aria-pressed="true"] {
+  border-color: var(--acento-tenue);
+  background: rgba(34, 195, 166, 0.06);
+}
+
+.modelo .datos {
+  flex: 1;
+  min-width: 0;
+}
+
+.modelo .nombre {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.modelo .meta {
+  font-size: 11px;
+  color: var(--texto-tenue);
+  margin-top: 2px;
+}
+
+.modelo .meta .alerta {
+  color: var(--ambar);
+}
+
+.insignia {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--acento-tenue);
+  color: var(--acento);
+  white-space: nowrap;
+}
+
+.insignia.gris {
+  border-color: var(--borde);
+  color: var(--texto-tenue);
+}
+
+/* -------------------------------------------------------------- progreso */
+
+.progreso {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--panel-alto);
+  overflow: hidden;
+}
+
+.progreso .relleno {
+  height: 100%;
+  background: var(--acento);
+  border-radius: 999px;
+  transition: width 200ms ease;
+}
+
+.progreso-info {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--texto-tenue);
+  margin-top: 5px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* -------------------------------------------------------------- asistente */
+
+.asistente {
+  max-width: 620px;
+  margin: 0 auto;
+  padding: 8px 0 24px;
+}
+
+.asistente > * + * {
+  margin-top: 16px;
+}
+
+.asistente h2 {
+  font-size: 20px;
+}
+
+.asistente .intro {
+  color: var(--texto-medio);
+  font-size: 14px;
+  margin: 6px 0 0;
+  line-height: 1.55;
+}
+
+.pasos {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  font-size: 11px;
+  color: var(--texto-tenue);
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+}
+
+.pasos .bolita {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--borde);
+}
+
+.pasos .bolita.activa {
+  background: var(--acento);
+}
+
+.pasos .bolita.hecha {
+  background: var(--acento-tenue);
+}
+
+.hallazgos {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.hallazgos li {
+  display: grid;
+  grid-template-columns: 116px 1fr;
+  gap: 12px;
+  font-size: 13px;
+  align-items: baseline;
+}
+
+.hallazgos .clave {
+  color: var(--texto-tenue);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.hallazgos .valor {
+  color: var(--texto);
+  overflow-wrap: anywhere;
+}
+
+.porque {
+  font-size: 12px;
+  color: var(--texto-tenue);
+  line-height: 1.55;
+  margin: 0;
+  border-left: 2px solid var(--borde);
+  padding-left: 12px;
+}
+
+.acciones {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.acciones .espacio {
+  flex: 1;
+}
+
+/* ------------------------------------------------------------------ misc */
+
+.cargando-vista {
+  color: var(--texto-tenue);
+  font-size: 13px;
+  padding: 40px 0;
+  text-align: center;
+}
+
+.error-vista {
+  border: 1px solid rgba(240, 86, 74, 0.4);
+  background: rgba(240, 86, 74, 0.07);
+  color: #ffb3ac;
+  border-radius: var(--radio);
+  padding: 12px 14px;
+  font-size: 13px;
+}
+
+/* Dos utilidades y nada más: lo que se repite tres veces se gana una clase. */
+.ancho-total {
+  width: 100%;
+  min-width: 0;
+}
+
+.separado {
+  margin-top: 12px;
+}
+
+.avisos li > span:first-child {
+  flex: 1;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #26303d;
+  border-radius: 999px;
+  border: 3px solid var(--fondo);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #33404f;
+}

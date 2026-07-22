@@ -2666,6 +2666,7 @@ dependencies = [
 name = "mithflow-app"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "mithflow-core",
  "rdev",
  "rodio",

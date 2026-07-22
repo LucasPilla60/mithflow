@@ -3,8 +3,8 @@
 El cascarón de Tauri v2 alrededor de `mithflow-core`: ventana, bandeja, atajo
 global y persistencia. El motor de dictado vive en `../crates/core`.
 
-> La interfaz de `src/` es **provisoria**. Existe para verificar que los
-> comandos y los eventos funcionan; la de verdad es la tarea siguiente.
+La interfaz de `src/` son tres vistas en React + TypeScript, sin librería de
+gráficos ni de componentes: dashboard, ajustes y asistente de primer arranque.
 
 ## Requisitos
 
@@ -32,6 +32,28 @@ cargo build --release -p mithflow-app --features custom-protocol
 **`--features custom-protocol` no es opcional.** Sin ella el binario compila en
 modo desarrollo y busca el frontend en `http://localhost:1420`: ventana en
 blanco y ningún error visible. `npm run tauri build` la activa sola.
+
+## La interfaz sin el backend
+
+`mock.html` levanta las mismas tres vistas contra un backend simulado
+(`src/desarrollo/`), para diseñar y sacar capturas sin micrófono ni modelo:
+
+```powershell
+npm run dev
+# http://localhost:1420/mock.html?escenario=normal
+#                                 ?escenario=primer-arranque   (asistente)
+#                                 ?escenario=grabando
+```
+
+Desde la consola del navegador, `mithflow.dictar("una frase")` dispara un
+`dictado-nuevo` y `mithflow.emit("estado-cambiado", …)` cambia el estado, para
+ver la actualización en vivo.
+
+**No llega a producción**: `vite build` compila sólo `index.html`, así que ni
+`mock.html` ni `src/desarrollo/` entran al `dist/` que empaqueta Tauri. La
+comprobación es mecánica —`dist/` no puede contener la cadena
+`MITHFLOW_SIMULADO`— y el simulado **no reemplaza a los tests de Rust**: si un
+dato de ahí y uno de `comandos.rs` no coinciden, manda el de Rust.
 
 ## Modelo
 
@@ -61,5 +83,15 @@ motivo a la vista: descargarlo se hace desde Ajustes, o sea desde esta misma app
 | `src-tauri/src/motor.rs` | carga del modelo, calentamiento y transcripción |
 | `src-tauri/src/comandos.rs` | la API que ve el frontend |
 | `src-tauri/build.rs` | junta las 13 DLLs de ggml para el instalador |
+| `src/api.ts` | el contrato con el backend: comandos, eventos y tipos |
+| `src/App.tsx` | estado del motor, navegación y avisos |
+| `src/vistas/Dashboard.tsx` | métricas, gráficos e historial paginado |
+| `src/vistas/Ajustes.tsx` | los ajustes, incluido borrar el historial |
+| `src/vistas/Asistente.tsx` | primer arranque: medir, recomendar, descargar |
+| `src/desarrollo/` | backend simulado; **no entra al build de producción** |
+
+Los tests del núcleo corren con `cargo test`; los de la app quedan fuera del
+default del workspace (necesitan `dist/`), así que van con
+`cargo test --workspace` después de `npm run build`.
 
 Las decisiones y sus porqués están en `../DECISIONES.md`.

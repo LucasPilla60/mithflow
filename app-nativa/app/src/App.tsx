@@ -1,132 +1,204 @@
 /**
- * Interfaz PROVISORIA. La de verdad es la tarea siguiente.
+ * El cascarón: barra de estado, navegación y avisos.
  *
- * Lo único que tiene que demostrar es que las dos mitades del contrato
- * funcionan: el estado y el historial se piden al montarse (un dictado hecho
- * con la ventana cerrada tiene que aparecer igual), y a partir de ahí llegan
- * por evento. Sin la primera mitad, abrir la ventana mostraría una lista vacía.
+ * Lo que vive acá y no en las vistas es lo que no depende de cuál esté abierta:
+ * el estado del motor —que tiene que verse igual mirando el dashboard o los
+ * ajustes— y los avisos que el backend emite en cualquier momento.
+ *
+ * # Cuándo aparece el asistente
+ *
+ * Cuando el catálogo dice que **ningún** modelo está descargado, que es el único
+ * estado en el que la app no puede dictar. No es una bandera guardada: si el
+ * usuario borra los modelos, el asistente vuelve solo.
  */
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   alAviso,
   alCambiarEstado,
-  alDictadoNuevo,
+  cancelarTodas,
+  leerCatalogo,
   leerEstado,
-  leerHistorial,
+  mensajeDeError,
   pausar,
   reanudar,
   type Aviso,
-  type Dictado,
+  type Catalogo,
   type EstadoDto,
 } from "./api";
-import "./App.css";
+import Dashboard from "./vistas/Dashboard";
+import VistaAjustes from "./vistas/Ajustes";
+import Asistente from "./vistas/Asistente";
+import "./estilos.css";
 
-const ULTIMOS = 20;
+type Vista = "dashboard" | "ajustes";
 
-const COLOR: Record<string, string> = {
-  cargando: "#9aa0a6",
-  listo: "#34a853",
-  grabando: "#ea4335",
-  transcribiendo: "#fbbc04",
-  error: "#b31412",
-};
+/** Cuánto queda en pantalla un aviso antes de irse solo. */
+const VIDA_DEL_AVISO_MS = 6000;
+
+/** Cuántos avisos se apilan como mucho. */
+const MAX_AVISOS = 4;
+
+interface AvisoEnPantalla extends Aviso {
+  id: number;
+}
 
 export default function App() {
   const [estado, setEstado] = useState<EstadoDto | null>(null);
-  const [dictados, setDictados] = useState<Dictado[]>([]);
-  const [avisos, setAvisos] = useState<Aviso[]>([]);
+  const [catalogo, setCatalogo] = useState<Catalogo | null>(null);
+  const [vista, setVista] = useState<Vista>("dashboard");
+  const [asistenteAbierto, setAsistenteAbierto] = useState(false);
+  const [asistenteCerrado, setAsistenteCerrado] = useState(false);
+  const [avisos, setAvisos] = useState<AvisoEnPantalla[]>([]);
   const [fallo, setFallo] = useState<string | null>(null);
-  // Un `ref` y no un estado: sólo sirve para descartar una respuesta que llega
-  // después de desmontar, y no tiene que redibujar nada.
   const montado = useRef(true);
+  const proximoId = useRef(1);
+
+  const avisar = useCallback((texto: string, nivel: "info" | "error") => {
+    const id = proximoId.current++;
+    setAvisos((previos) => [{ id, texto, nivel }, ...previos].slice(0, MAX_AVISOS));
+    setTimeout(
+      () => setAvisos((previos) => previos.filter((a) => a.id !== id)),
+      VIDA_DEL_AVISO_MS,
+    );
+  }, []);
 
   useEffect(() => {
     montado.current = true;
 
     // 1. El presente, de una: los eventos sólo cuentan lo que pasa de acá en
-    //    adelante.
-    Promise.all([leerEstado(), leerHistorial(ULTIMOS)])
-      .then(([e, h]) => {
+    //    adelante, así que sin esto abrir la ventana mostraría una app "vacía".
+    Promise.all([leerEstado(), leerCatalogo()])
+      .then(([e, c]) => {
         if (!montado.current) return;
         setEstado(e);
-        setDictados(h);
+        setCatalogo(c);
       })
-      .catch((e) => setFallo(String(e)));
+      .catch((e) => montado.current && setFallo(mensajeDeError(e)));
 
     // 2. Y las novedades.
     const suscripciones = [
-      alCambiarEstado((e) => setEstado(e)),
-      alDictadoNuevo((d) =>
-        setDictados((previos) => [d, ...previos].slice(0, ULTIMOS)),
-      ),
-      alAviso((a) => setAvisos((previos) => [a, ...previos].slice(0, 5))),
+      alCambiarEstado((e) => montado.current && setEstado(e)),
+      alAviso((a) => avisar(a.texto, a.nivel)),
     ];
 
     return () => {
       montado.current = false;
-      // `listen` devuelve una promesa: hay que esperarla para poder cancelar.
-      suscripciones.forEach((p) =>
-        p.then((cancelar) => cancelar()).catch(() => {}),
-      );
+      cancelarTodas(suscripciones);
     };
-  }, []);
+  }, [avisar]);
 
-  const alternar = () => {
+  const alternarPausa = () => {
     if (!estado) return;
     const accion = estado.pausado ? reanudar : pausar;
-    accion().catch((e) => setFallo(String(e)));
+    accion().catch((e) => avisar(mensajeDeError(e), "error"));
   };
 
+  const cambiarCatalogo = useCallback((c: Catalogo) => setCatalogo(c), []);
+
+  // El asistente se ABRE cuando no hay ningún modelo, pero después se queda
+  // hasta que el usuario lo cierre. Sin esta traba se cerraría solo en la mitad:
+  // el asistente baja el modelo de medición, el catálogo deja de estar vacío y
+  // la condición se apagaría justo antes de mostrar la recomendación.
+  useEffect(() => {
+    if (catalogo && catalogo.modelos.every((m) => !m.descargado)) {
+      setAsistenteAbierto(true);
+    }
+  }, [catalogo]);
+
+  const mostrarAsistente = asistenteAbierto && !asistenteCerrado;
+  const clave = estado?.estado ?? "cargando";
+
   return (
-    <main>
-      <h1>MithFlow</h1>
-      <p className="detalle">
-        Interfaz provisoria: sirve para verificar comandos y eventos.
-      </p>
+    <div className="app" data-estado={clave}>
+      <header className="encabezado">
+        <div className="marca">
+          <h1>MithFlow</h1>
+          {catalogo && <span className="version">v{catalogo.version}</span>}
+        </div>
 
-      <section className="estado">
-        <span
-          className="punto"
-          style={{ background: COLOR[estado?.estado ?? "cargando"] }}
-        />
-        <strong>{estado ? estado.etiqueta : "…"}</strong>
-        {estado?.pausado && <em> · pausado</em>}
-      </section>
-      {estado?.detalle && <p className="detalle">{estado.detalle}</p>}
+        <div
+          className={estado?.pausado ? "estado pausado" : "estado"}
+          data-estado={clave}
+          role="status"
+          aria-live="polite"
+        >
+          <span className="punto" />
+          <span className="etiqueta">{estado ? estado.etiqueta : "Conectando…"}</span>
+          {estado?.pausado && <span className="pausa">en pausa</span>}
+        </div>
 
-      <button onClick={alternar} disabled={!estado}>
-        {estado?.pausado ? "Reanudar dictado" : "Pausar dictado"}
-      </button>
+        {estado && (
+          <button type="button" className="boton chico" onClick={alternarPausa}>
+            {estado.pausado ? "Reanudar" : "Pausar"}
+          </button>
+        )}
 
-      {fallo && <p className="detalle">No pude hablar con el backend: {fallo}</p>}
+        <span className="espacio" />
+
+        {!mostrarAsistente && (
+          <nav className="pestanas">
+            <button
+              type="button"
+              aria-current={vista === "dashboard" ? "page" : undefined}
+              onClick={() => setVista("dashboard")}
+            >
+              Dashboard
+            </button>
+            <button
+              type="button"
+              aria-current={vista === "ajustes" ? "page" : undefined}
+              onClick={() => setVista("ajustes")}
+            >
+              Ajustes
+            </button>
+          </nav>
+        )}
+      </header>
+
+      <main className="contenido">
+        {fallo && <p className="error-vista">No pude hablar con el backend: {fallo}</p>}
+
+        {/* Con el asistente abierto el detalle sobra: el único error posible
+            ahí es "no hay ningún modelo descargado", y el asistente ES la
+            respuesta a eso. Repetirlo arriba hace ver rota una pantalla de
+            bienvenida. */}
+        {estado?.detalle && !mostrarAsistente && (
+          <p className="detalle-estado">{estado.detalle}</p>
+        )}
+
+        {mostrarAsistente && catalogo ? (
+          <Asistente
+            catalogo={catalogo}
+            alCambiarCatalogo={cambiarCatalogo}
+            alTerminar={(destino) => {
+              setAsistenteCerrado(true);
+              setVista(destino);
+            }}
+          />
+        ) : vista === "dashboard" ? (
+          <Dashboard />
+        ) : (
+          <VistaAjustes alCambiarCatalogo={cambiarCatalogo} avisar={avisar} />
+        )}
+      </main>
 
       {avisos.length > 0 && (
         <ul className="avisos">
-          {avisos.map((a, i) => (
-            <li key={i} className={a.nivel}>
-              {a.texto}
+          {avisos.map((a) => (
+            <li key={a.id} className={a.nivel}>
+              <span>{a.texto}</span>
+              <button
+                type="button"
+                className="boton plano chico"
+                aria-label="Descartar"
+                onClick={() => setAvisos((previos) => previos.filter((o) => o.id !== a.id))}
+              >
+                ×
+              </button>
             </li>
           ))}
         </ul>
       )}
-
-      <h2>Últimos dictados</h2>
-      {dictados.length === 0 ? (
-        <p className="detalle">Todavía no hay ninguno.</p>
-      ) : (
-        <ol className="dictados">
-          {dictados.map((d, i) => (
-            <li key={`${d.ts}-${i}`}>
-              <time>{d.ts.replace("T", " ")}</time>
-              <p>{d.final}</p>
-              <small>
-                {d.words} palabras · {d.audio_s.toFixed(1)} s de audio ·{" "}
-                {d.transcribe_s.toFixed(2)} s de transcripción
-              </small>
-            </li>
-          ))}
-        </ol>
-      )}
-    </main>
+    </div>
   );
 }
