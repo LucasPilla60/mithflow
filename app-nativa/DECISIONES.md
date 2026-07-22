@@ -1296,7 +1296,7 @@ sobre la misma versión de `tao` que usa Tauri 2.11, y mide con Win32 lo que de
 verdad importa. Con el foco en el editor del usuario:
 
 ```text
-ventana enfocada al arrancar: «Revisar documentación y … - Cosmo-Gestion - Cursor»
+ventana enfocada al arrancar: «Revisar documentación y … - <proyecto> - Cursor»
 foco de teclado / cursor de texto de ese hilo: (329340, 0)
 
 PASA WS_EX_NOACTIVATE en el estilo extendido  (GWL_EXSTYLE = 0x080c0138)
@@ -1859,7 +1859,7 @@ ventanita y mire qué pasa. Tres decisiones de método, y ninguna es adorno:
 Resultado, con el foco en el navegador del usuario:
 
 ```text
-ventana enfocada al arrancar: «(2) WhatsApp Business - Brave» (0x2045e)
+ventana enfocada al arrancar: «(2) <una app cualquiera> - Brave» (0x2045e)
 foco de teclado / cursor de texto de ese hilo: (132190, 0)
 
 configuración                                     GWL_EXSTYLE clic→vent. clic→abajo  foco ok

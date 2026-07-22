@@ -1,155 +1,207 @@
-# MithFlow — Dictado por voz 100% local (adiós Wispr Flow, adiós USD 15/mes)
+# MithFlow
 
-Presionás **F8** → hablás → presionás **F8** de nuevo → el texto aparece donde esté el cursor.
-Igual que Wispr Flow, pero tuyo, gratis, offline y con tu vocabulario (MithData, PyME, CRM...).
+**Dictado por voz para Windows, 100% local.** Apretás una tecla, hablás,
+apretás de nuevo, y el texto transcripto aparece donde tengas el cursor. En
+cualquier aplicación. Sin nube, sin cuenta y sin suscripción: el audio se
+procesa en tu máquina y no sale de ahí.
 
-Incluye un **dashboard** con analíticas de uso: cuánto dictaste, tu velocidad hablando, tiempo ahorrado vs. tipear, y el historial completo buscable.
+![Dashboard de MithFlow](app-nativa/app/capturas/01-dashboard.png)
+
+<p align="center">
+  <img src="app-nativa/docs/capturas/indicador-hablando.png" alt="La ventanita de grabación mientras hay voz">
+  &nbsp;&nbsp;
+  <img src="app-nativa/docs/capturas/indicador-silencio.png" alt="La ventanita cuando sólo hay ruido de fondo">
+  &nbsp;&nbsp;
+  <img src="app-nativa/docs/capturas/indicador-transcribiendo.png" alt="La ventanita transcribiendo">
+</p>
+
+<p align="center"><em>La ventanita de grabación: teal cuando te escucha, gris cuando sólo hay ruido.</em></p>
 
 ---
 
-## 🖥️ Hay dos versiones, y conviven
+## Por qué existe
 
-| | **Python** (esta carpeta) | **Nativa** (`app-nativa/`) |
-|---|---|---|
-| Estado | **la que uso todos los días** | empaquetada y con actualizaciones automáticas (1.1.0) |
-| Atajo | **F8** | **F9** |
-| Motor | faster-whisper + CUDA (necesita NVIDIA para ir rápido) | whisper.cpp + Vulkan (NVIDIA, AMD o Intel) |
-| Instalación | Python 3.10+ y `instalar.ps1` | un instalador `.exe`, sin Python |
-| Interfaz | dashboard de Streamlit en el navegador | ventana propia + ícono en la bandeja |
-| Historial | `history.jsonl` | `%APPDATA%\com.mithdata.mithflow\history-nativo.jsonl` |
+[Wispr Flow](https://wisprflow.ai) hace esto muy bien y cuesta unos USD 15 por
+mes. A cambio, tu voz viaja a un servidor ajeno: todo lo que dictás —notas,
+mensajes, documentos de trabajo, cosas de clientes— pasa por una máquina que no
+controlás.
 
-**Las teclas y los archivos son distintos a propósito**: podés tener las dos
-corriendo al mismo tiempo sin que una toque los datos de la otra. La versión
-Python sigue documentada abajo y no se toca.
+MithFlow hace lo mismo con un modelo de transcripción corriendo en tu propia
+computadora. No cuesta nada, no hay cuenta que crear, y funciona con el cable de
+red desenchufado. La contrapartida honesta es que la primera vez hay que bajar
+un modelo de entre 511 MB y 1,5 GB, y que sólo funciona en Windows.
 
-### Qué es la app nativa
+## Qué hace
 
-La misma idea —apretás una tecla, hablás, el texto aparece donde está el
-cursor— pero sin Python, sin entorno virtual y sin instalar CUDA. Un solo
-instalador que trae el motor de transcripción adentro y **elige solo cómo
-acelerar en cada máquina**: Vulkan si la placa lo soporta, y si no, la variante
-de CPU que le corresponda al procesador entre nueve posibles. Por eso anda igual
-en la máquina con RTX 3080 que en una notebook con gráficos integrados.
+- **Dictado con atajo global.** Una tecla (F9 por defecto, configurable) empieza
+  y termina la grabación desde cualquier aplicación.
+- **Pega donde está el cursor.** No hay que copiar nada a mano: el texto entra
+  donde estabas escribiendo, y el portapapeles queda como estaba.
+- **Limpia el texto.** Saca muletillas (`eh`, `este`, `o sea`…) y tartamudeos
+  (`el el informe`) con reglas locales, en menos de un milisegundo.
+- **Vocabulario propio.** Los términos que el modelo suele errar —nombres de
+  productos, jerga, siglas— se le pasan como contexto y deja de inventarlos.
+- **Dashboard con métricas.** Cuánto dictaste, tu velocidad hablando, el tiempo
+  ahorrado contra tipear, y el historial completo buscable.
+- **Indicador flotante con vúmetro.** Una ventanita chica que muestra que te
+  está escuchando de verdad, sin tener que abrir la app.
+- **Actualizaciones automáticas firmadas.** La app avisa cuando hay versión
+  nueva y se actualiza sola, verificando la firma antes de instalar nada.
+- **Offline.** Ni el audio ni el texto salen de la máquina. La red se usa sólo
+  para bajar el modelo la primera vez y para consultar si hay versión nueva.
 
-Trae además ventana propia con dashboard e historial, ajustes (tecla, sonidos,
-vocabulario, arranque con Windows) y un asistente de primer arranque que mide la
-máquina y recomienda qué modelo bajar.
+---
 
-**Indicador de grabación.** Al apretar la tecla aparece una ventanita chica
-—168 × 48 px, abajo y centrada por defecto— con el nivel de lo que entra por el
-micrófono y el tiempo que llevás grabando. Las barras se ponen **teal cuando hay
-voz** y **grises cuando sólo hay ruido de fondo**, con el mismo umbral que usa el
-motor para decidir si vale la pena transcribir: sirve para darse cuenta de que el
-micrófono está silenciado o de que la entrada es el auricular equivocado, sin
-tener la ventana abierta. Cuando soltás la tecla se queda en "Transcribiendo…"
-hasta que llega el texto.
+## Requisitos
+
+- **Windows 10 u 11, 64 bits.**
+- ~99 MB de disco para el programa, más el modelo (511 MB – 1,5 GB, una sola
+  vez).
+- Un micrófono.
+- **GPU: opcional.**
+
+### Anda con o sin placa de video
+
+El motor usa **Vulkan**, que no es exclusivo de ninguna marca: acelera igual en
+**NVIDIA, AMD o Intel**, incluidos los gráficos integrados de una notebook. Y si
+en la máquina no hay nada usable —driver viejo, integrada sin soporte de
+cómputo— **cae a CPU sin que haya que configurar nada**.
+
+Un solo instalador cubre los tres casos. Adentro viajan los shaders de Vulkan y
+**nueve variantes compiladas del backend de CPU** (`sse42`, `sandybridge`,
+`haswell`, `skylakex`, `icelake`, `cascadelake`, `cannonlake`, `alderlake`,
+`x64`); al arrancar se carga la que corresponde a ese procesador. Por eso el
+mismo `.exe` anda en un escritorio con placa dedicada y en una notebook con
+gráficos integrados.
+
+En una máquina lenta el dictado tarda más, y eso es todo: no deja de funcionar.
+El asistente de primer arranque lo tiene en cuenta y baja un modelo más chico
+(ver más abajo).
+
+---
+
+## Instalación
+
+1. Bajá el instalador de la [página de
+   Releases](https://github.com/LucasPilla60/mithflow/releases/latest):
+   `MithFlow_<versión>_x64-setup.exe`. Son unos 12,5 MB.
+2. Doble clic.
+3. **Windows va a mostrar "Windows protegió su PC".** Es esperable: el
+   instalador **no está firmado digitalmente** (un certificado de firma de
+   código cuesta cientos de dólares por año). Hacé clic en **"Más
+   información"** —el link chiquito debajo del texto— y después en **"Ejecutar
+   de todas formas"**.
+4. Se instala **para el usuario actual** en `%LOCALAPPDATA%\MithFlow`, sin pedir
+   permisos de administrador. Crea el acceso directo en el menú Inicio, y el del
+   escritorio si dejás tildada la casilla de la última pantalla.
+5. Si Windows no tiene **WebView2** (Windows 11 ya lo trae), el instalador lo
+   descarga solo.
+
+De ahí en adelante MithFlow se actualiza solo: esto es sólo para la primera
+instalación de cada máquina.
+
+### El asistente de primer arranque
+
+La primera vez hay que descargar un modelo, y la app abre un asistente que
+**mide tu máquina antes de recomendarte cuál**:
+
+![El asistente recomendando un modelo tras medir la máquina](app-nativa/app/capturas/24-asistente-recomendacion.png)
+
+Baja el modelo más chico (511 MB), transcribe con él un audio de referencia y
+cronometra cuántos segundos de audio procesa por segundo de reloj. Con ese
+número —y con la RAM disponible— elige entre tres modelos. Podés aceptar la
+recomendación o elegir otro: el más grande transcribe mejor, el más chico
+responde antes.
+
+Los modelos quedan en `%APPDATA%\MithFlow\models\`.
+
+> **La primera transcripción de cada máquina tarda entre veinte segundos y un
+> minuto** compilando los shaders de Vulkan. La app lo paga sola al arrancar,
+> antes de que dictes; el driver guarda el resultado, así que pasa una sola vez
+> por máquina (y de nuevo si actualizás el driver de la placa).
+
+Para desinstalar: **Ajustes → Desinstalar MithFlow**, que además te deja elegir
+si borrar los modelos y el historial; o Configuración → Aplicaciones → MithFlow,
+que saca el programa y deja los datos.
+
+---
+
+## Uso
+
+1. **Hacé clic donde querés que aparezca el texto** (el campo, el documento, el
+   chat). Ahí tiene que quedar el cursor parpadeando.
+2. **Apretá F9** y hablá.
+3. **Apretá F9 de nuevo.** El texto se pega solo.
+
+La tecla se cambia desde Ajustes. MithFlow la **suprime**: no llega a la
+aplicación que tengas enfocada, así que apretarla no mueve nada de lugar.
+
+### Sobre el foco: el texto va a la ventana en la que hiciste clic
+
+Si trabajás con dos monitores puede pasarte esto: empezás a dictar en una
+pantalla, movés el mouse a la otra y el texto no aparece ahí. **No está roto.**
+
+Windows le entrega lo que se escribe a la ventana **activa**, que es aquella en
+la que hiciste clic por última vez —la que tiene la barra de título iluminada y
+el cursor de texto parpadeando—. **Mover el mouse no la cambia.** MithFlow no
+hace nada distinto de lo que haría tu teclado, y es lo mismo que hace Wispr
+Flow.
+
+Lo cómodo es que **el clic se puede hacer mientras hablás**: si arrancaste a
+dictar y te diste cuenta de que el cursor está en la ventana equivocada, hacé
+clic en la correcta sin dejar de hablar y soltá la tecla ahí. El texto se pega
+donde hiciste el último clic.
+
+> **¿Y por qué no pega donde está el mouse?** Porque cualquier movimiento
+> accidental del mouse mandaría el dictado a otro lado. Que mande el clic es lo
+> predecible: el texto sale exacto donde saldría si lo estuvieras tecleando.
+
+### La ventanita de grabación
+
+Al apretar la tecla aparece un indicador chico —168 × 48 px, abajo y centrado
+por defecto— con el nivel de lo que entra por el micrófono y el tiempo que
+llevás grabando.
+
+Las barras se ponen **teal cuando hay voz** y **grises cuando sólo hay ruido de
+fondo**, con el mismo umbral que usa el motor para decidir si vale la pena
+transcribir. Sirve para darte cuenta de que el micrófono está silenciado o de
+que la entrada es el auricular equivocado, sin tener la ventana abierta. Cuando
+soltás la tecla se queda en "Transcribiendo…" hasta que llega el texto.
+
+![La ventanita, antes y después de achicarla](app-nativa/docs/capturas/indicador-antes-y-despues.png)
 
 **Se agarra con el mouse y se mueve.** Si te tapa algo, arrastrala: se queda
 donde la dejes, entre dictados y entre reinicios, y en el monitor donde la hayas
-soltado. Desde *Ajustes → Indicador de grabación* se vuelve a la posición por
-defecto, se cambia la esquina o se apaga del todo. **Nunca toma el foco**: hagas
-lo que hagas con ella, el cursor de texto se queda donde estabas escribiendo.
-Como contrapartida, los clics ya no la atraviesan — mientras esté encima de un
-botón ese botón no se puede apretar, y por eso se puede correr.
+soltado. **Nunca toma el foco**: hagas lo que hagas con ella, el cursor de texto
+se queda donde estabas escribiendo. Como contrapartida, los clics ya no la
+atraviesan — mientras esté encima de un botón, ese botón no se puede apretar, y
+por eso se puede correr.
 
-![Antes y después de la ventanita](app-nativa/docs/capturas/indicador-antes-y-despues.png)
+Desde *Ajustes → Indicador de grabación* se vuelve a la posición por defecto, se
+cambia la esquina o se apaga del todo. Apagado no cuesta nada: ni ventana, ni
+eventos, ni ciclos en el camino del audio.
 
-### 🖱️ Dos pantallas: hacé clic donde querés el texto
+![Los ajustes del indicador](app-nativa/docs/capturas/ajustes-indicador.png)
 
-Si trabajás con dos monitores puede pasarte esto: **empezás a dictar en una
-pantalla, movés el mouse a la otra y el texto no aparece ahí**. No está roto:
-es como funciona Windows, y es lo mismo que hace Wispr Flow.
+### Ajustes
 
-**Windows le entrega lo que se escribe a la ventana "activa"**, que es aquella
-en la que hiciste clic por última vez — la que tiene la barra de título
-iluminada y el cursor de texto parpadeando. **Mover el mouse no la cambia**: el
-puntero puede pasear por toda la pantalla y lo que escribas sigue yendo al mismo
-lado. MithFlow no hace nada distinto de lo que haría tu teclado.
+![Ajustes de MithFlow](app-nativa/app/capturas/03-ajustes.png)
 
-**Qué hacer, entonces:**
+Tecla de dictado, modo de limpieza, límite de duración de la grabación,
+vocabulario propio, muletillas, modelo, sonidos, arranque con Windows, posición
+del indicador, borrado del historial y desinstalación.
 
-1. **Hacé clic en el lugar donde querés el texto** (el campo, el documento, el
-   chat). Ahí tiene que quedar el cursor parpadeando.
-2. Apretá la tecla y hablá.
+### Actualizaciones automáticas
 
-Y esto es lo cómodo: **el clic se puede hacer mientras hablás**. Si arrancaste a
-dictar y te diste cuenta de que el cursor está en la ventana equivocada, hacé
-clic en la correcta sin dejar de hablar y soltá la tecla ahí: el texto se pega
-donde hiciste el último clic. El indicador de grabación tampoco te lo va a robar
-—está hecho para no tomar nunca el foco—, así que podés moverlo de lugar en el
-medio de un dictado y seguir hablando.
-
-> **¿Y por qué no pega donde está el mouse?** Porque cualquier movimiento
-> accidental del mouse —o un rincón caliente, o una notificación— mandaría el
-> dictado a otro lado. Que mande el clic es lo predecible: el texto sale exacto
-> donde saldría si lo estuvieras tecleando.
-
-### Instalación
-
-El instalador se llama **`MithFlow_1.1.0_x64-setup.exe`**. No está en el repo
-(pesa de más): lo genera `Generar-Instalador.ps1` y queda en `instalador\`.
-
-Esto es sólo para la **primera** instalación de cada máquina: a partir de ahí
-MithFlow se actualiza solo (ver «Actualizaciones automáticas» más abajo).
-
-1. Doble clic en el instalador.
-2. ⚠️ **Windows va a mostrar "Windows protegió su PC".** Es esperable y no
-   significa que haya un virus: el instalador **no está firmado digitalmente**
-   (un certificado de firma cuesta cientos de dólares por año). Hacé clic en
-   **"Más información"** —el link chiquito debajo del texto— y después en
-   **"Ejecutar de todas formas"**.
-3. Se instala **para el usuario actual** en `%LOCALAPPDATA%\MithFlow`, sin pedir
-   permisos de administrador. Crea el acceso directo en el menú Inicio, y el del
-   escritorio si dejás tildada la casilla de la última pantalla.
-4. La primera vez **hay que descargar el modelo**: la app abre un asistente que
-   mide la máquina y recomienda cuál. Se guarda en `%APPDATA%\MithFlow\models\`.
-
-Para desinstalar: Configuración → Aplicaciones → MithFlow, o `uninstall.exe` en
-la carpeta de instalación.
-
-### Cuánto pesa
-
-| | Tamaño |
-|---|---|
-| El instalador que se descarga | **12,1 MiB** (12.743.287 bytes) |
-| Lo que ocupa ya instalado | **~99 MB** |
-| El modelo, aparte y una sola vez | 511 MB – 1,5 GB |
-
-El spec original estimaba "~20 MB" y se quedaba corto en lo instalado: el motor
-son **13 DLLs de ggml que suman 84 MB**, y `ggml-vulkan.dll` sola pesa 74 MB
-porque lleva los shaders de todas las GPU. Lo que salva el número de la descarga
-es que esos shaders comprimen casi 8:1 con LZMA, así que el `.exe` que se baja
-son 12 MB aunque en disco queden 99.
-
-### Detalles del primer arranque
-
-- **La primera transcripción de la máquina tarda ~40 s** compilando los shaders
-  de Vulkan. La app lo paga sola al arrancar, antes de que dictes; el driver
-  guarda el resultado, así que pasa una sola vez por máquina (y de nuevo si
-  actualizás el driver de la placa).
-- Si Windows no tiene **WebView2** (Windows 11 ya lo trae), el instalador lo
-  descarga solo.
-- Requiere Windows 10/11 de 64 bits.
-
----
-
-## 🔄 Actualizaciones automáticas (app nativa)
-
-> **Leelo dentro de seis meses sin acordarte de nada: está escrito para eso.**
-
-### Qué ve el usuario
+![El aviso de versión nueva](app-nativa/app/capturas/21-actualizacion-aviso.png)
 
 Al abrir MithFlow, quince segundos después, la app consulta **una sola vez** si
-salió una versión nueva. Si hay, aparece una **barrita ámbar** debajo del
-encabezado: *"Hay una versión nueva: v1.2.0 (tenés la v1.1.0)"*, con
-**Actualizar y reiniciar** y una **×** para descartarla. No es un modal, no
-bloquea nada y no vuelve a consultar mientras usás la app.
+salió una versión nueva. Si hay, aparece una barrita ámbar debajo del
+encabezado, con **Actualizar y reiniciar** y una **×** para descartarla. No es un
+modal y no bloquea nada.
 
-Al aceptar: baja el instalador, **verifica la firma**, lo aplica y MithFlow se
-cierra y vuelve a abrirse solo, ya actualizado.
-
-En **Ajustes → Actualizaciones** están la versión instalada y el botón **Buscar
-actualizaciones**, que consulta en el momento.
+Al aceptar: baja el instalador, **verifica la firma criptográfica**, lo aplica y
+MithFlow se cierra y vuelve a abrirse solo, ya actualizado.
 
 Tres cosas que **no** pasan nunca:
 
@@ -161,327 +213,459 @@ Tres cosas que **no** pasan nunca:
 - **No baja de versión.** Si el manifiesto anuncia una versión que no es más
   nueva que la instalada, no se ofrece nada.
 
-Si corrés MithFlow desde una copia de desarrollo (`target\release\`) en vez de
-la instalación, Ajustes lo dice con todas las letras: no hay nada que
-actualizar.
+En **Ajustes → Actualizaciones** están la versión instalada y un botón para
+consultar en el momento.
 
-### ⚠️ El repositorio de GitHub: ya está configurado, y falta crearlo
+---
 
-La app viene apuntando a:
+## Cómo funciona por dentro
 
-```
-https://github.com/LucasPilla60/mithflow/releases/latest/download/latest.json
-```
+Un solo ejecutable: núcleo en **Rust**, interfaz en **React + TypeScript**
+adentro de **Tauri v2**. Sin procesos separados, sin servidor HTTP y sin
+navegador. Cinco hilos que se hablan por canales, con un único escritor del
+estado.
 
-**Falta el paso que no hace el código: crear ese repositorio en tu cuenta**, con
-el nombre `mithflow`, y publicar ahí las releases (ver más abajo). Hasta que
-exista, la consulta de actualizaciones devuelve 404, se anota y la app sigue
-funcionando igual: nada del actualizador puede impedir dictar.
+### El motor: whisper.cpp con backends dinámicos
 
-**Si preferís otro nombre**, se cambia en **un solo lugar**:
+La transcripción la hace **whisper.cpp** a través del crate
+[`transcribe-cpp`](https://crates.io/crates/transcribe-cpp), con las features
+`dynamic-backends` y `vulkan`. Los backends de ggml no van compilados adentro
+del binario: son **13 DLLs sueltas** que se instalan al lado del ejecutable, y
+al arrancar se carga la que sirva en esa máquina —Vulkan si la placa lo soporta,
+y si no la variante de CPU que le corresponda al procesador—.
 
-**Archivo:** `app-nativa/app/src-tauri/tauri.conf.json`
-**Dónde:** `plugins` → `updater` → `endpoints`
+Ésa es la razón de que un solo instalador ande en cualquier máquina, y también
+del 91% de su peso: `ggml-vulkan.dll` sola pesa 74 MB porque lleva los shaders
+de todas las GPU.
 
-```json
-"endpoints": [
-  "https://github.com/LucasPilla60/mithflow/releases/latest/download/latest.json"
-]
-```
+El modelo es **Whisper large-v3-turbo** en formato GGUF, en tres cuantizaciones
+(`F16`, `Q5_K_M`, `Q4_K_M`). Se descarga aparte y se **verifica por SHA-256**
+contra un hash compilado dentro del binario: un hash servido por el mismo host
+que el modelo no verifica nada. Un archivo que no verifica no se da por bueno y
+tampoco se borra —puede ser una copia que trajiste a mano—: se aparta como
+`.gguf.invalido`.
 
-`Generar-Instalador.ps1` lee esa URL y deriva de ahí la de descarga del
-instalador, así que **no hay un segundo lugar** donde el nombre del repositorio
-pueda quedar mal.
+### La elección del modelo: por medición, no por especificaciones
 
-Esa URL queda grabada dentro del `.exe`: después de cambiarla hay que volver a
-compilar para que las instalaciones nuevas sepan a dónde consultar (y las que ya
-están instaladas van a seguir consultando la vieja hasta que actualicen una vez).
-El repositorio puede ser público o privado, pero si es privado las releases no
-son descargables sin credenciales y el actualizador no va a poder bajar nada.
+Es la decisión de diseño más útil del proyecto. Mirar las especificaciones de la
+placa **no funciona**: una integrada AMD reporta ~128 MB de "VRAM dedicada" por
+DXGI, así que una matriz de umbrales la mandaría a la rama "sin GPU utilizable"
+aunque Vulkan corra perfecto ahí.
 
-### Publicar una versión nueva
+Entonces no se pregunta: **se mide**. La app baja el modelo más chico,
+transcribe con él un clip de referencia de 9,5 segundos y calcula el factor de
+tiempo real (segundos de audio por segundo de reloj). Con eso, y con la RAM del
+sistema, elige.
 
-**Un comando:**
+Hay una sutileza que costó encontrarla, y vale para cualquiera que copie el
+método: **el clip de referencia ES la calibración**. Whisper rellena toda entrada
+hasta 30 s antes del codificador, así que el tiempo de inferencia es casi
+independiente de lo que dure el clip. Con un clip de 3 s en vez de 9,5 s, la
+máquina de referencia —la misma que hace 9,5 s de audio en 0,221 s—
+**no calificaba para el modelo grande**: el mismo costo fijo dividido por 3 en
+vez de por 9,5 desinfla el factor unas tres veces. En un modelo con ventana de
+entrada fija, un "factor de tiempo real" no es una propiedad de la máquina sola,
+sino del par (máquina, duración del clip).
+
+### La limpieza: reglas, no un LLM
+
+El prototipo usaba un LLM local (Ollama) para pulir la redacción. Se sacó porque
+**tardaba ~3,5 s casi sin importar el largo del texto** (overhead de arranque,
+no trabajo real), contra menos de 1 ms de un puñado de expresiones regulares. Y
+Whisper ya puntúa y capitaliza bien por su cuenta.
+
+Las reglas son deliberadamente conservadoras: si se comen más de la mitad del
+texto, devuelven el original. La lista de fábrica no saca `"bueno"`, `"nada"` ni
+`"a ver"`, porque también son arranques legítimos y sacarlos cambia el tono.
+
+### Antes del modelo hay una compuerta de energía
+
+Whisper alucina sobre silencio y sobre ruido: devuelve frases de los subtítulos
+con los que se entrenó ("gracias por ver el video"). Se barrieron seis
+combinaciones de sus umbrales internos (`no_speech_thold` × `logprob_thold`) y
+**todas alucinaron**; sobre ruido inventa cadenas distintas cada vez, así que
+una lista de bloqueo tampoco cierra.
+
+La solución es una **compuerta de RMS antes del modelo**, que es determinista y
+no puede inventar texto. Medido sobre fixtures de 10 s: silencio `0.000000`,
+ruido de fondo `0.002891`, voz `0.071`–`0.101`. El umbral quedó en `0.01`,
+deliberadamente por debajo del punto medio geométrico: entre transcribir ruido y
+perder un dictado flojo, el error caro es el segundo.
+
+### El atajo suprime la tecla
+
+El hook global es [`rdev`](https://crates.io/crates/rdev) con la feature
+`unstable_grab`, en un hilo dedicado. `grab` no sólo escucha: **se come la
+tecla**, así que no llega a la aplicación enfocada y el cursor de texto no se
+mueve de donde estaba.
+
+Cómo se verificó, porque la primera prueba no servía: se probó con el Bloc de
+notas y eso **no prueba nada** —F9 no hace nada ahí, así que "no pasó nada" es
+idéntico tanto si la tecla se suprimió como si llegó y la app la ignoró—. La
+prueba concluyente fue **VS Code, donde F9 pone o saca un breakpoint**: efecto
+visible e inequívoco. La consola registró la tecla capturada y no apareció
+ningún breakpoint.
+
+> Para verificar supresión de teclas hay que elegir una aplicación donde esa
+> tecla tenga un efecto observable. Un objetivo que la ignora da un falso
+> positivo.
+
+El callback corre en el camino crítico del teclado: si tarda más que
+`LowLevelHooksTimeout` (300 ms), Windows lo desengancha sin avisar. Por eso sólo
+hace operaciones atómicas y un `send` que no bloquea.
+
+### El indicador no puede robar el foco
+
+Una ventanita que se lleve el foco mueve el cursor de texto y el dictado termina
+en otro lado, que es exactamente el defecto que la supresión de la tecla
+resuelve. La garantía la da `WS_EX_NOACTIVATE` (vía `focusable(false)`), y se
+midió con Win32 en un spike aparte (`app-nativa/spike-superpuesta/`), con un
+**testigo** —una ventana igual pero sin ese estilo— para probar que el aparato
+de medición detecta un robo de foco cuando lo hay.
+
+De ahí salió un hallazgo que habría mordido en producción: `focused(false)` sin
+`focusable(false)` habría robado el foco **a partir de la segunda grabación**,
+porque `tao` consume la marca `MARKER_DONT_FOCUS` en el primer `show` y después
+vuelve a `SW_SHOW`. La primera grabación se habría visto bien; de la segunda en
+adelante, el cursor se iría del campo de texto.
+
+### El pegado espera una confirmación, no un `sleep`
+
+El prototipo copiaba al portapapeles, dormía 150 ms, mandaba Ctrl+V y dormía
+300 ms más. La versión nativa espera el **número de secuencia del portapapeles**,
+que es la señal real de que la copia se aplicó: 460 ms de esperas fijas se
+convirtieron en ~2,5 ms de espera confirmada.
+
+Queda un margen fijo de 120 ms antes de restaurar el portapapeles, y es
+empírico: no hay señal del sistema que diga "la app destino ya procesó el
+Ctrl+V".
+
+---
+
+## Números medidos
+
+Todos salen de mediciones reproducibles, no de estimaciones. El protocolo y los
+porqués están en [`app-nativa/DECISIONES.md`](app-nativa/DECISIONES.md).
+
+### Transcripción — Vulkan resultó más rápido que CUDA
+
+Mismo audio (WAV de voz sintética de 9,5 s), mismo escritorio (RTX 3080),
+modelo caliente:
+
+| Implementación | Backend | Transcripción |
+|---|---|---|
+| Prototipo Python + faster-whisper | CUDA, float16 | 0,280 s (mediana, N=20) |
+| **Rust + `transcribe-cpp`** | **Vulkan** | **0,221 s** (mediana, 5 pasadas) |
+
+Un **21% más rápido**, contra el 25-30% *más lento* que preveía el diseño. La
+causa probable es que whisper.cpp con Vulkan usa los matrix cores
+(`NV_coopmat2`) y el GGUF F16 en lugar de la conversión de CTranslate2. El dato
+importa porque significa que **no hace falta compilar con CUDA**: un único
+binario con Vulkan cumple.
+
+### Latencia percibida — soltar la tecla hasta ver el texto
+
+Es la vara del proyecto: no el tiempo del modelo, sino el que se siente. El
+presupuesto que se fijó fue 900 ms.
+
+| | Prototipo Python | App nativa |
+|---|---|---|
+| Transcripción | 0,280 s | 0,221 s |
+| Pegado | 0,460 s (dos `sleep` fijos) | **0,1225 s** (mediana, N=10) |
+| **Latencia percibida** | **0,739 s** (mediana, N=20) | **~0,48 s** |
+
+El 62% de la latencia del prototipo eran esperas fijas del pegado. Eliminarlas
+fue la mitad de la mejora; la otra mitad es que no hay un intérprete de Python
+en el medio.
+
+### Arranque del motor
+
+| | Tiempo |
+|---|---|
+| Primera inferencia de la máquina (compilando shaders de Vulkan) | 17,4 s con `F16` · 39,2 s con `Q4_K_M` |
+| Siguientes arranques (caché del driver caliente) | 0,2 s |
+
+El caché de shaders es **por máquina y por juego de shaders**, no por proceso:
+cada cuantización usa sus propios kernels. La app paga ese costo al arrancar,
+con un calentamiento propio, para que no lo pague el primer dictado del usuario.
+
+(Detalle contraintuitivo: el calentamiento **no puede usar silencio**. La
+compuerta de RMS corta antes de llegar al modelo, así que un buffer de ceros
+vuelve en microsegundos sin compilar un solo shader y el calentamiento sería un
+no-op silencioso. Se usa medio segundo de senoide a 220 Hz.)
+
+### Tamaño
+
+| | Tamaño |
+|---|---|
+| El instalador que se descarga (1.1.0) | **13.088.261 bytes (12,5 MiB)** |
+| Lo que ocupa ya instalado | **~99 MB** |
+| El modelo, aparte y una sola vez | 511 MB – 1,5 GB |
+
+El diseño original estimaba "~20 MB" y subestimó el bundle **4x**: el motor son
+**13 DLLs de ggml que suman 84 MB**, y `ggml-vulkan.dll` sola pesa 74 MB —el 91%
+del peso— porque lleva los shaders de todas las GPU.
+
+Lo que salva el número de la descarga es que esos shaders son bytecode SPIR-V,
+muy repetitivo, y **comprimen casi 8:1 con LZMA**. Las nueve variantes de CPU
+juntas son 8,1 MB sin comprimir y aportan menos de 1 MB a la descarga: por eso
+se dejan las nueve, que es lo que hace que un solo binario sirva para cualquier
+procesador.
+
+### Tests
+
+**102 en el núcleo + 143 en la app**, con `clippy --all-targets -D warnings`
+limpio. Cubren, entre otras cosas, la paridad de la limpieza contra la
+implementación original, la descarga de modelos contra un servidor HTTP levantado
+dentro del test (incluido el caso "el servidor ignora el `Range`"), la selección
+de modelo en cada rama y cada borde, y la ubicación del indicador en dos
+monitores con distinto factor de escala.
+
+---
+
+## Compilar desde el código
+
+Sólo Windows. La cadena completa:
+
+| Herramienta | Versión con la que se compila hoy |
+|---|---|
+| Rust (estable, `x86_64-pc-windows-msvc`) | 1.97.1 |
+| VS Build Tools 2022 (C++) | 17.14.36 |
+| CMake | 4.4.0 |
+| **Vulkan SDK** | 1.4.350.0 |
+| Node / npm | 24 / 11 |
 
 ```powershell
-.\Generar-Instalador.ps1 -Version 1.2.0 -Notas "Qué cambió en esta versión."
-```
+$env:VULKAN_SDK = "C:\VulkanSDK\1.4.350.0"
+$env:PATH = "$env:USERPROFILE\.cargo\bin;C:\Program Files\CMake\bin;$env:VULKAN_SDK\Bin;$env:PATH"
 
-(Clic derecho → *Ejecutar con PowerShell* también sirve, pero ahí no se puede
-pasar la versión: recompila la que ya está.)
-
-El script hace todo solo:
-
-1. Corta si el endpoint del actualizador no tiene forma de URL de GitHub (o si
-   todavía dijera `REEMPLAZAR`, que ya no es el caso).
-2. Escribe la versión en los **tres** archivos que la llevan
-   (`app-nativa/Cargo.toml`, `app-nativa/app/package.json`,
-   `app-nativa/app/src-tauri/tauri.conf.json`) y **los relee para verificar que
-   quedaron iguales**. Si se desincronizan, el actualizador se rompe de formas
-   confusas.
-3. Compila.
-4. Firma el instalador con la clave privada minisign.
-5. Deja en `instalador\` los **dos archivos que hay que subir**.
-
-**Después, a mano en GitHub** (esto no lo hace el script):
-
-1. *Releases* → *Draft a new release*.
-2. La etiqueta tiene que ser **exactamente `v` + la versión**: para la 1.2.0, la
-   etiqueta es `v1.2.0`. Si no, la URL del manifiesto apunta a la nada.
-3. Adjuntá los **dos** archivos de `instalador\`, con esos nombres:
-   - `MithFlow_1.2.0_x64-setup.exe`
-   - `latest.json`
-4. **Publicala**, no la dejes en borrador: `/releases/latest/` no ve los
-   borradores y la consulta devolvería 404.
-
-Las instalaciones existentes ven la actualización la próxima vez que abran
-MithFlow.
-
-### 🔑 La clave privada: dónde está y qué pasa si se pierde
-
-```
-%USERPROFILE%\.mithflow\mithflow-updater.key       ← la privada (SECRETA)
-%USERPROFILE%\.mithflow\mithflow-updater.key.pub   ← la pública (copiada ya en tauri.conf.json)
-```
-
-Es decir, dentro de tu carpeta de usuario de Windows, en una carpeta `.mithflow`.
-
-**Está fuera del proyecto a propósito.** Adentro, cualquier `git add -A`
-distraído la publicaría para siempre en un repo público, y quien la tenga puede
-firmar un instalador que las tres máquinas van a bajar y ejecutar solas, sin
-preguntar nada. No hay forma de revocarla. El `.gitignore` tiene además
-`*.key`, `*.pem` y compañía como segunda red, por si alguna vez la copiás al
-árbol "un minuto para probar algo".
-
-**La clave pública sí es pública**: está en `tauri.conf.json` y tiene que estar
-ahí, es la que verifica la firma. No es un secreto.
-
-#### Si se pierde la clave privada
-
-**Nadie puede volver a actualizar las instalaciones que ya están afuera.**
-
-Se puede generar una clave nueva y poner la pública nueva en `tauri.conf.json`,
-pero las copias ya instaladas siguen buscando la firma de la clave vieja y
-**van a rechazar todo lo que se publique**. La única salida es ir a las tres
-máquinas y **reinstalar a mano** con el instalador nuevo.
-
-Por eso: **respaldala.** Copiá esos dos archivos a donde guardes lo importante
-(gestor de contraseñas, disco externo, lo que uses). Son 500 bytes.
-
-```powershell
-# Generar el par de nuevo (sólo si la perdiste y ya asumiste el costo de arriba)
 cd app-nativa\app
-npm run tauri --silent -- signer generate --ci --password= -w "$env:USERPROFILE\.mithflow\mithflow-updater.key"
+npm install
+npm run tauri build     # -> ..\target\release\bundle\nsis\MithFlow_<version>_x64-setup.exe
 ```
 
-Después hay que copiar el contenido de `mithflow-updater.key.pub` al campo
-`pubkey` de `tauri.conf.json`.
+Para desarrollo con recarga del frontend: `npm run tauri dev`.
 
-#### Sobre la contraseña de la clave
+### Las trampas, que son la parte que cuesta tiempo
 
-La clave se generó **sin contraseña**, para que publicar sea un comando y no un
-comando más una contraseña que nadie va a recordar. El costo es real: quien
-consiga el archivo puede firmar actualizaciones sin nada más. Como el archivo
-vive en el perfil de usuario de esta máquina y nunca sale de ahí, el riesgo es
-"alguien con acceso a esta computadora", que ya podría hacer cosas peores.
+Están todas documentadas en
+[`app-nativa/DECISIONES.md`](app-nativa/DECISIONES.md); acá va el resumen, para
+ahorrarte las horas que costaron.
 
-Si preferís ponerle contraseña, generá el par con `--password "loquesea"` en vez
-de `--password=`, y en `Generar-Instalador.ps1` cambiá el `--password=` del paso
-de firma por `--password "loquesea"`. **No la escribas en el script**: se
-commitea junto con él y no habrías ganado nada.
+1. **El Vulkan SDK es dependencia de COMPILACIÓN, no sólo de ejecución.** Es la
+   trampa menos obvia de todas. La feature `vulkan` de `transcribe-cpp` necesita
+   cabeceras, librería y el compilador de shaders **`glslc`**, no sólo el
+   runtime `vulkan-1.dll` que ya trae el driver. Sin el SDK, el build muere con:
 
-#### Esto NO es la firma de código de Windows
+   ```
+   CMake Error: Could NOT find Vulkan (missing: Vulkan_LIBRARY Vulkan_INCLUDE_DIR glslc)
+   ```
 
-Son dos cosas distintas:
+   Hace falta `VULKAN_SDK` apuntando a la instalación y `%VULKAN_SDK%\Bin` en el
+   `PATH`.
 
-| | Firma minisign (esto) | Firma de código (SmartScreen) |
-|---|---|---|
-| Para qué | que la app confíe en la actualización | que Windows confíe en el instalador |
-| Cuesta | nada | cientos de dólares por año |
-| Estado | **hecha** | no la tenemos |
+2. **`winget install Rustlang.Rustup` instala el gestor, no una toolchain.** Si
+   además queda a medias (*"Missing manifest in toolchain"*), la salida es
+   `rustup toolchain uninstall stable` seguido de
+   `rustup toolchain install stable --profile default`.
 
-Al instalar a mano se va a seguir viendo "Windows protegió su PC" (ese aviso lo
-dispara la marca que el navegador le pone a lo que bajás). Al **actualizar**
-desde la app el instalador no pasa por el navegador, así que lo esperable es que
-no aparezca — pero no está verificado en las tres máquinas, así que si en alguna
-sale, es eso y no un problema: **Más información → Ejecutar de todas formas**.
+3. **`cargo build --release` a secas da un binario de desarrollo.**
+   `tauri-build` decide dev/producción por la feature `custom-protocol` de
+   `tauri`, que el CLI activa sola en `tauri build`. Con un `cargo build`
+   pelado, `generate_context!` compila en modo desarrollo y el ejecutable busca
+   el frontend en `http://localhost:1420`: **ventana en blanco y ningún error
+   visible**. Si compilás sin el CLI:
 
----
+   ```powershell
+   npm run build     # el frontend PRIMERO: generate_context! exige que dist/ exista
+   cargo build --release -p mithflow-app --features custom-protocol
+   ```
 
-## 📦 Instalación en otra PC o notebook (versión Python)
+4. **La app de Tauri está fuera de los `default-members` del workspace.** Es
+   deliberado: `generate_context!` exige `app/dist/`, que produce `npm run build`
+   y está en `.gitignore`, así que un clon recién hecho no podría correr
+   `cargo test` sin instalar Node primero. Los tests del núcleo van con
+   `cargo test`; los de la app, con `cargo test --workspace` **después** de
+   `npm run build`.
 
-Funciona con o sin GPU. Toda la instalación son 3 pasos.
+5. **Las 13 DLLs de ggml entran al instalador porque alguien las nombra.**
+   Compilando ya quedan al lado del `.exe`, pero de casualidad: el bundler de
+   Tauri empaqueta lo que se le declara, y sin eso la app instalada falla con
+   `backend error (status 8)`. Lo resuelven `build.rs` (copia las DLLs a
+   `src-tauri/transcribe-libs/`) y `bundle.resources` en `tauri.conf.json`. La
+   copia tiene que correr **antes** de `tauri_build::build()`, que es donde se
+   resuelve el glob. Verificalo, no lo asumas:
 
-### Paso 1 — Instalar Python (una sola vez por máquina)
-Descargá **Python 3.10 o superior** desde https://python.org.
-⚠️ Al instalar, **tildá la casilla "Add python.exe to PATH"** (abajo de todo en la primera pantalla). Sin eso el instalador no lo encuentra.
+   ```powershell
+   7z l app-nativa\target\release\bundle\nsis\MithFlow_*_x64-setup.exe   # 13 .dll
+   ```
 
-### Paso 2 — Copiar los archivos
-Copiá la carpeta `MithFlow` completa a la otra máquina (por pendrive, red o la nube).
+   La prueba que de verdad cierra el tema es extraer el instalador a un
+   directorio aislado y correr el `.exe` desde ahí, sin `target\release` cerca:
+   en la salida tiene que decir `load_backend: loaded Vulkan backend from <ese
+   directorio>`.
 
-**No copies estas carpetas/archivos** — se regeneran solos y ocupan de más:
-| No copiar | Por qué |
-|---|---|
-| `.venv\` | Entorno virtual, se recrea en la otra PC (y tiene rutas absolutas de esta) |
-| `__pycache__\` | Caché de Python |
-| `history.jsonl` | **Tu historial de dictados** — es privado, no lo lleves a otra máquina |
-| `*.log`, `status.json` | Archivos temporales |
+6. **`init_backends_default()` va antes de `Model::load`.** Con
+   `dynamic-backends`, si no, falla con `backend error (status 8)`.
 
-Los que **sí** necesitás:
+### La interfaz sin el backend
+
+`mock.html` levanta las mismas vistas contra un backend simulado, para diseñar y
+sacar capturas sin micrófono ni modelo:
+
+```powershell
+cd app-nativa\app
+npm run dev
+# http://localhost:1420/mock.html?escenario=normal
+#                                 ?escenario=primer-arranque | grabando | sin-instalar | actualizacion
+# http://localhost:1420/superpuesta-mock.html?escenario=hablando | silencio | transcribiendo | cerca-del-tope
 ```
-mithflow.py              el motor de dictado
-dashboard.py             el dashboard de analíticas
-requirements.txt         lista de dependencias
-instalar.ps1             el instalador
-MithFlow-App.vbs         lanzador principal (motor + dashboard)
-MithFlow.bat             lanzador con consola visible
-MithFlow-invisible.vbs   lanzador solo motor, sin ventana
-Detener-MithFlow.bat     para apagarlo
-.streamlit\config.toml   tema del dashboard + binding a localhost
+
+No llega a producción: `vite build` compila sólo `index.html`, y hay una
+comprobación mecánica de que `dist/` no contenga la cadena `MITHFLOW_SIMULADO`.
+
+### Publicar una versión
+
+El script `Generar-Instalador.ps1` sincroniza el número de versión en los tres
+archivos que lo llevan, compila, firma el instalador con minisign y arma el
+`latest.json`. El procedimiento completo y el manejo de la clave están en
+[`docs/publicar-una-version.md`](docs/publicar-una-version.md).
+
+---
+
+## Privacidad
+
+Es el argumento central del proyecto, así que conviene ser preciso.
+
+- **El audio y el texto nunca salen de tu máquina.** La transcripción corre
+  local. No hay telemetría, no hay analítica, no hay cuenta.
+- **MithFlow usa la red exactamente dos veces**, y las dos son evidentes:
+  cuando **descargás un modelo** (desde Hugging Face, y sólo si se lo pedís) y
+  cuando **consulta si hay una versión nueva** (una petición a GitHub, quince
+  segundos después de abrir). Nada de lo que dictaste viaja en ninguna de las
+  dos. Sin internet, todo lo demás funciona igual.
+- **El historial se guarda en texto plano en tu disco**, en
+  `%APPDATA%\com.mithdata.mithflow\history-nativo.jsonl`. Es todo lo que
+  dictaste. Tratalo como lo que es: un archivo personal.
+  - Para borrarlo: **Ajustes → Privacidad → Borrar el historial** (pide
+    confirmación en dos pasos), o borrá el archivo.
+  - **Desinstalar desde Ajustes** te ofrece llevarte también los modelos y el
+    historial; el desinstalador de Windows, por sí solo, los deja huérfanos.
+- **El webview está encerrado.** CSP explícita (`default-src 'self'`, sin
+  `connect-src` hacia afuera) y `capabilities` de Tauri al mínimo: la interfaz
+  no tiene por dónde sacar el historial aunque quisiera. La ventanita flotante,
+  que está siempre por encima de todo, tiene una capability propia con **un solo
+  permiso** (escuchar eventos).
+- **El texto dictado nunca va a los logs**, sólo los tiempos.
+- **Las actualizaciones se verifican criptográficamente** (minisign) antes de
+  instalarse. Es la única función de la app que baja un ejecutable y lo corre, y
+  sin firma sería una puerta trasera con forma de comodidad.
+
+---
+
+## Estado y limitaciones
+
+Es un proyecto chico, escrito para un uso propio y publicado por si le sirve a
+alguien más. Lo honesto:
+
+**Funciona, y se usa a diario.** Dictado, pegado, sonidos, dashboard,
+actualizaciones automáticas y el indicador flotante están andando en una
+instalación real.
+
+**Lo que hay que saber antes de instalarlo:**
+
+- **Sólo Windows.** El atajo global (`rdev`), el autoarranque (registro de
+  Windows) y el instalador (NSIS) son específicos. No hay build de macOS ni de
+  Linux, y no está en los planes.
+- **El instalador no está firmado digitalmente.** Vas a ver SmartScreen la
+  primera vez. Un certificado de firma de código cuesta cientos de dólares por
+  año; la firma que **sí** existe es la de las actualizaciones (minisign), que
+  es otra cosa y protege otra cosa.
+- **Los números están medidos en una sola máquina**: un escritorio con RTX 3080.
+  El resto de la matriz —AMD, Intel, integradas, CPU pura— está implementado y
+  cubierto por tests, y la selección es automática, pero no está cronometrado en
+  hardware real de cada tipo. Si lo probás en algo distinto, contalo en un issue.
+- **La supresión de la tecla no funciona sobre ventanas elevadas.** Es una
+  limitación de Windows: un proceso sin privilegios no puede engancharle el
+  teclado a uno que sí los tiene. No está verificado, pero se asume que no.
+- **En español rioplatense.** El idioma está fijo en `es` a propósito: la
+  autodetección lo confunde con portugués en clips cortos y cuesta tiempo en
+  cada dictado. Cambiarlo es una constante en
+  `app-nativa/crates/core/src/config.rs`.
+
+### Qué falta
+
+1. Modo push-to-talk (mantener presionado) además del toggle.
+2. Perfiles de limpieza por aplicación (email formal vs. chat casual).
+3. Firmar el instalador para que Windows deje de mostrar SmartScreen.
+4. Probar [Parakeet v3](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3), más
+   rápido que Whisper y con soporte de español, para exprimir la latencia.
+
+---
+
+## La versión Python (el prototipo)
+
+Antes de la app nativa, MithFlow era un script de Python con un dashboard de
+Streamlit. **Sigue funcionando y sigue mantenido**, y las dos versiones conviven
+a propósito: teclas distintas (F8 y F9) y archivos de historial distintos, así
+que se pueden correr al mismo tiempo.
+
+La documentación completa está en
+**[`docs/version-python.md`](docs/version-python.md)**.
+
+Si estás empezando, instalá la nativa: no necesita Python, no necesita CUDA y
+anda con cualquier placa (o sin ninguna).
+
+---
+
+## Estructura del repositorio
+
+```
+app-nativa/                  la app de escritorio (la versión recomendada)
+├── crates/core/             el núcleo en Rust: audio, STT, limpieza, historial,
+│                            perfilado de hardware, descarga de modelos
+├── crates/cli/              una CLI mínima para probar el núcleo sin interfaz
+├── app/                     Tauri v2 + React: ventana, bandeja, atajo, ajustes
+├── spike*/                  los experimentos que resolvieron las dudas técnicas
+└── DECISIONES.md            el registro técnico: qué se decidió, qué se midió
+                             y qué se rompió en el camino
+
+docs/                        documentación
+├── version-python.md        la versión Python
+├── publicar-una-version.md  el proceso de release y la firma
+└── superpowers/             el diseño y los planes de implementación
+
+mithflow.py, dashboard.py    el prototipo en Python
+Generar-Instalador.ps1       compila, firma y arma el manifiesto de update
 ```
 
-### Paso 3 — Ejecutar el instalador
-Clic derecho en **`instalar.ps1`** → **Ejecutar con PowerShell**.
-
-> Si Windows bloquea el script ("la ejecución de scripts está deshabilitada"), abrí PowerShell en la carpeta y corré:
-> `powershell -ExecutionPolicy Bypass -File instalar.ps1`
-
-El instalador hace todo solo:
-1. Verifica que Python sea 3.10+
-2. Crea el entorno virtual e instala las dependencias
-3. **Detecta si hay GPU NVIDIA**: si hay, instala las librerías CUDA y usa el modelo grande (`large-v3-turbo`); si no, usa `small` en CPU
-4. Crea la config del dashboard (con acceso restringido a esa máquina)
-5. Verifica que el micrófono y las dependencias funcionen
-6. Pregunta si querés Ollama (**opcional** — ver más abajo)
-
-### Listo: doble clic en `MithFlow-App.vbs`
-La primera corrida descarga el modelo Whisper (1-2 GB, una sola vez) — tarda unos minutos. Las siguientes arrancan en ~30 segundos.
+**`app-nativa/DECISIONES.md` es el documento interesante** si te importa el
+porqué de algo: tiene las mediciones, los callejones sin salida y los bugs que
+aparecieron durante la implementación, con lo que se aprendió de cada uno.
 
 ---
 
-### ¿Cuánta máquina necesito?
+## Licencia
 
-| | Con GPU NVIDIA | Solo CPU |
-|---|---|---|
-| Modelo | `large-v3-turbo` | `small` |
-| Latencia | ~0.3s | ~2-4s según el procesador |
-| RAM/VRAM | ~2 GB VRAM | ~2 GB RAM |
-| Calidad en español | Excelente | Muy buena |
+[MIT](LICENSE).
 
-No hace falta tocar nada: `MODEL_SIZE = "auto"` elige solo según lo que encuentre. En una notebook sin GPU anda perfecto, solo esperás un par de segundos más.
+## Créditos
 
-### Ollama: cuándo sí y cuándo no
-Por default **no hace falta** — la limpieza rápida por reglas (`CLEANUP_MODE = "fast"`) saca muletillas y arregla el espaciado en menos de 1 ms. Instalá Ollama solo si querés que un LLM reescriba y pula la redacción entera; cuesta ~3.5s por dictado. En notebooks sin GPU, mejor no.
+MithFlow es un envoltorio alrededor de trabajo ajeno muy bueno:
 
-### Problemas comunes
-
-| Síntoma | Solución |
-|---|---|
-| "Python no está instalado o no está en el PATH" | Reinstalá Python tildando "Add python.exe to PATH" |
-| `cublas64_12.dll is not found` | Faltan las librerías CUDA: `.venv\Scripts\python.exe -m pip install nvidia-cublas-cu12 nvidia-cudnn-cu12` |
-| F8 suena pero no pega | Verificá que haya **una sola** instancia (`Detener-MithFlow.bat` y relanzá). Revisá `mithflow.log` |
-| No detecta micrófono | Configuración de Windows → Sistema → Sonido → Entrada; y permitir acceso al micrófono a apps de escritorio |
-| El dashboard no abre | Esperá ~10s tras el doble clic; entrá a mano a http://localhost:8501 |
-| Suena un beep grave al iniciar | Ya hay otro MithFlow corriendo; el nuevo se cierra solo (es lo correcto) |
-
----
-
-## 🎙️ Uso diario
-
-| Archivo | Qué hace |
-|---|---|
-| **`MithFlow-App.vbs`** ⭐ | App completa: motor F8 de fondo + dashboard como ventana de aplicación |
-| `MithFlow.bat` | Solo motor, con consola visible (útil para ver errores) |
-| `MithFlow-invisible.vbs` | Solo motor, sin ventana; logs en `mithflow.log` |
-| `Detener-MithFlow.bat` | Apaga el motor |
-
-**Arranque automático con Windows:** `Win+R` → `shell:startup` → pegá ahí un acceso directo a `MithFlow-invisible.vbs` (o a `MithFlow-App.vbs` si querés también el dashboard).
-
-Una sola instancia a la vez: si lanzás un segundo MithFlow, suena un tono grave y se cierra solo.
-
----
-
-## ⚙️ Configuración (bloque CONFIGURACIÓN en `mithflow.py`)
-
-| Variable | Qué toca |
-|---|---|
-| `HOTKEY` | Tecla de dictado (default `F8`) |
-| `MODEL_SIZE` | `"auto"` elige según GPU. Fijalo a `small`/`medium`/`large-v3-turbo` si querés |
-| `INITIAL_PROMPT` | **Tu vocabulario propio** — agregá términos que Whisper suele errar |
-| `CLEANUP_MODE` | `"fast"` (default, instantáneo) · `"llm"` (Ollama, +3.5s) · `"off"` (crudo) |
-| `FILLERS` | Muletillas que saca el modo `fast` |
-| `BEAM_SIZE` | `1` (default, rápido) o `5` si notás errores en audio difícil |
-
----
-
-## 📊 Latencia (medido en RTX 3080, 21/7/2026)
-
-| Configuración | Transcripción | Limpieza | Total |
-|---|---|---|---|
-| `fast` + beam 1 (**actual**) | 0.30s | 0.002s | **0.31s** |
-| `llm` + beam 5 (anterior) | 0.53s | 3.55s | 4.08s |
-
-El cuello de botella era el LLM: tardaba ~3.5s casi sin importar el largo del texto (overhead de arranque, no trabajo real). El modo `fast` limpia por reglas en menos de 1 ms, y Whisper ya puntúa y capitaliza bien por su cuenta.
-
-`BEAM_SIZE = 1` da transcripción idéntica a `5` y es 28% más rápido (verificado con voz real en español generada por TTS).
-
----
-
-## 🔊 Sonidos
-
-Tonos suaves sintetizados (no los beeps estridentes de Windows). Para cambiarlos, editá las funciones `beep_*` en `mithflow.py`:
-
-| Sonido | Cuándo |
-|---|---|
-| Acorde ascendente | Empezó a grabar |
-| Tono grave corto | Dejó de grabar |
-| Campanita | Texto pegado |
-| Grave largo | Error / ya hay otra instancia |
-
-Bajá `vol` en `play_tone()` si los querés aún más discretos (default `0.15`).
-
----
-
-## 🔒 Privacidad
-
-- **Todo corre local**: tu voz nunca sale de la máquina. Sin nube, sin cuenta, sin telemetría.
-- El dashboard escucha **solo en `127.0.0.1`** (`.streamlit\config.toml`): nadie más en tu red puede verlo. **No cambies `server.address` a `0.0.0.0`** — `history.jsonl` guarda en texto plano todo lo que dictaste.
-- `history.jsonl` es privado: no lo copies entre máquinas ni lo subas a ningún lado. Para borrar tu historial, borrá el archivo.
-
----
-
-## 🔧 Notas técnicas
-
-- `vad_filter=True` recorta silencios antes de transcribir (más rápido y menos alucinación).
-- El script preserva tu portapapeles: copia el texto, pega con Ctrl+V y restaura lo que tenías.
-- El hotkey usa `suppress=True`: F8 no llega a la app enfocada, así el cursor no se mueve de donde estaba.
-- La limpieza `fast` es conservadora por diseño: si las reglas se comen más de la mitad del texto, devuelve el original. No saca `"bueno"`, `"nada"` ni `"a ver"` porque también son arranques legítimos.
-- En modo `llm`, si el modelo devuelve algo vacío o de largo desproporcionado se descarta y se usa el texto crudo. El LLM nunca puede "inventar" tu dictado.
-- El motor escribe un latido en `status.json` cada 10s; así el dashboard sabe si está vivo sin inspeccionar procesos.
-
----
-
-## ✅ Estado (22/7/2026)
-
-**Python:** funcionando end-to-end en Windows 11 + RTX 3080 — dictado, pegado, sonidos, dashboard y analíticas. Probado con micrófono real.
-
-**Nativa:** instalador **1.1.0** generado y firmado, con actualizaciones automáticas contra GitHub Releases y el indicador de grabación chico y arrastrable. La 1.0.0 se verificó en instalación limpia (arranca, carga el motor por Vulkan y queda lista); el dictado real con micrófono todavía no se probó en la versión nativa.
-
-**Falta crear el repositorio** `LucasPilla60/mithflow` en GitHub y publicar ahí la release `v1.1.0` con los dos archivos de `instalador\`. Hasta entonces la consulta de actualizaciones devuelve 404 y la app funciona igual.
-
-**Ojo con la 1.0.0:** no tiene actualizador, así que las máquinas que la tengan instalada **no** van a recibir la 1.1.0 solas. Hay que instalarla a mano una vez en cada una; de ahí en adelante sí se actualizan solas.
-
-## 🗺️ Roadmap
-
-1. Modo push-to-talk (mantener presionado) en vez de toggle.
-2. Perfiles de limpieza por app (email formal vs. chat casual) — lo que Wispr llama "tone matching".
-3. ~~Empaquetarlo como .exe con ícono en la bandeja del sistema~~ — **hecho**, pero por otro camino: en vez de PyInstaller + pystray se reescribió el motor en Rust (`app-nativa/`), que además saca la dependencia de CUDA. Ver la sección de la app nativa arriba.
-4. Migrar a Parakeet v3 (más rápido que Whisper, ya soporta español) para exprimir aún más la latencia.
-5. **Firmar el instalador nativo** para que Windows deje de mostrar SmartScreen.
-6. En la app nativa, aplicar de verdad los tres ajustes que hoy sólo se guardan (vocabulario, muletillas, modo de limpieza).
-
----
-
-## Alternativa: Handy (si no querés mantener código)
-
-**https://handy.computer** — app open source ya hecha (Whisper local, Windows/Mac/Linux). Se instala en 10 minutos y transcribe muy bien, pero no tiene limpieza de muletillas, vocabulario propio ni dashboard. Es el plan B si algún día no querés seguir con esto.
+- **[whisper.cpp](https://github.com/ggml-org/whisper.cpp)** (Georgi Gerganov y
+  colaboradores) — el motor de inferencia, y `ggml` debajo. MIT.
+- **[transcribe.cpp / `transcribe-cpp`](https://github.com/handy-computer/transcribe.cpp)**
+  (handy.computer) — los bindings de Rust con backends dinámicos, que son los
+  que hacen posible un solo instalador para cualquier GPU. MIT. Los modelos GGUF
+  del catálogo salen de su
+  [colección en Hugging Face](https://huggingface.co/handy-computer).
+- **[Tauri](https://tauri.app)** — la app de escritorio: ventana, bandeja,
+  instalador y actualizador firmado.
+- **[Whisper](https://github.com/openai/whisper)** (OpenAI) — el modelo.
+- **[Handy](https://handy.computer)** — app de dictado local open source
+  (Windows, macOS y Linux), y la referencia de arquitectura de la que salieron
+  varias decisiones de este proyecto. Si querés algo ya hecho y multiplataforma,
+  empezá por ahí.
+- **[Wispr Flow](https://wisprflow.ai)** — el producto que definió lo que este
+  proyecto tenía que hacer para ser usable.

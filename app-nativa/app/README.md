@@ -45,7 +45,7 @@ compilar, firmar y armar el `latest.json`) el camino es
 `..\..\Generar-Instalador.ps1`, no este comando: ver «Actualizaciones
 automáticas» en el README raíz.
 
-Sale un instalador NSIS de **12,1 MiB** que ocupa **~99 MB** instalado: adentro
+Sale un instalador NSIS de **unos 12 MiB** que ocupa **~99 MB** instalado: adentro
 van el ejecutable y **las 13 DLLs de ggml** (84 MB sin comprimir, que es el
 motor). Que estén ahí no es gratis ni automático —lo arma `build.rs` y lo declara
 `bundle.resources`— así que **verificalo, no lo asumas**:
