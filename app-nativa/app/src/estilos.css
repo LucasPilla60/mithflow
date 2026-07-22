@@ -1000,11 +1000,18 @@ button.modelo:hover:not(:disabled) {
   letter-spacing: 0.07em;
 }
 
+.pasos > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .pasos .bolita {
   width: 6px;
   height: 6px;
   border-radius: 50%;
   background: var(--borde);
+  flex: none;
 }
 
 .pasos .bolita.activa {
@@ -1089,6 +1096,16 @@ button.modelo:hover:not(:disabled) {
 
 .separado {
   margin-top: 12px;
+}
+
+/* Letra chica al lado de un control: una aclaración o una advertencia. */
+.aclaracion {
+  font-size: 12px;
+  color: var(--texto-tenue);
+}
+
+.aclaracion.ojo {
+  color: var(--ambar);
 }
 
 .avisos li > span:first-child {

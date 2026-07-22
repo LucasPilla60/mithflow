@@ -234,7 +234,7 @@ export default function VistaAjustes({ alCambiarCatalogo, avisar }: Props) {
           <div className="ancho-total">
             <div className="fichas">
               {borrador.muletillas.length === 0 && (
-                <span className="nota" style={{ color: "var(--texto-tenue)" }}>
+                <span className="aclaracion">
                   Sin muletillas: la limpieza rápida sólo va a colapsar tartamudeos.
                 </span>
               )}
@@ -418,9 +418,7 @@ export default function VistaAjustes({ alCambiarCatalogo, avisar }: Props) {
           >
             {confirmandoBorrado ? (
               <>
-                <span className="cifra" style={{ color: "var(--ambar)", minWidth: 0 }}>
-                  ¿Seguro? No hay deshacer.
-                </span>
+                <span className="aclaracion ojo">¿Seguro? No hay deshacer.</span>
                 <button type="button" className="boton peligro" onClick={borrarTodoElHistorial}>
                   Sí, borrar todo
                 </button>

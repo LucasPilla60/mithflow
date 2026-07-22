@@ -80,9 +80,12 @@ export default function Asistente({ catalogo, alCambiarCatalogo, alTerminar }: P
   const montado = useRef(true);
 
   // El paso vigente lo leen los oyentes, que se registran una sola vez. Un
-  // `ref` evita re-suscribirse (y perder un evento en el hueco).
+  // `ref` evita re-suscribirse (y perder un evento en el hueco). Se sincroniza
+  // en un efecto y no durante el render, que React puede descartar.
   const pasoActual = useRef(paso);
-  pasoActual.current = paso;
+  useEffect(() => {
+    pasoActual.current = paso;
+  }, [paso]);
 
   const medir = useCallback(() => {
     setError(null);
@@ -168,7 +171,7 @@ export default function Asistente({ catalogo, alCambiarCatalogo, alTerminar }: P
     <div className="asistente">
       <div className="pasos">
         {["Presentación", "Medición", "Modelo"].map((nombre, i) => (
-          <span key={nombre} style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+          <span key={nombre}>
             <span
               className={
                 ETAPA[paso] > i ? "bolita hecha" : ETAPA[paso] === i ? "bolita activa" : "bolita"

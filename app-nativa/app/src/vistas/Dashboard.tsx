@@ -68,9 +68,12 @@ export default function Dashboard() {
   const montado = useRef(true);
   // El oyente de `dictado-nuevo` se registra una sola vez y necesita saber si
   // hay una búsqueda activa AHORA. Un `ref` y no el estado: volver a suscribirse
-  // en cada tecla perdería eventos entre el `unlisten` y el `listen`.
+  // en cada tecla perdería eventos entre el `unlisten` y el `listen`. Se
+  // sincroniza en un efecto y no durante el render, que React puede descartar.
   const busquedaActual = useRef(buscar);
-  busquedaActual.current = buscar;
+  useEffect(() => {
+    busquedaActual.current = buscar;
+  }, [buscar]);
 
   const refrescarMetricas = useCallback(() => {
     leerMetricas()
