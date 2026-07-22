@@ -244,7 +244,7 @@ MithFlow.
 %USERPROFILE%\.mithflow\mithflow-updater.key.pub   ← la pública (copiada ya en tauri.conf.json)
 ```
 
-En esta máquina: `C:\Users\lucas\.mithflow\`.
+Es decir, dentro de tu carpeta de usuario de Windows, en una carpeta `.mithflow`.
 
 **Está fuera del proyecto a propósito.** Adentro, cualquier `git add -A`
 distraído la publicaría para siempre en un repo público, y quien la tenga puede
