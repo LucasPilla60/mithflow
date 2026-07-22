@@ -37,8 +37,13 @@ blanco y ningún error visible. `npm run tauri build` la activa sola.
 
 ```powershell
 npm run tauri build
-# -> ../target/release/bundle/nsis/MithFlow_1.0.0_x64-setup.exe
+# -> ../target/release/bundle/nsis/MithFlow_<version>_x64-setup.exe
 ```
+
+Para **publicar** una versión (sincronizar el número en los tres archivos,
+compilar, firmar y armar el `latest.json`) el camino es
+`..\..\Generar-Instalador.ps1`, no este comando: ver «Actualizaciones
+automáticas» en el README raíz.
 
 Sale un instalador NSIS de **12,1 MiB** que ocupa **~99 MB** instalado: adentro
 van el ejecutable y **las 13 DLLs de ggml** (84 MB sin comprimir, que es el
@@ -46,7 +51,7 @@ motor). Que estén ahí no es gratis ni automático —lo arma `build.rs` y lo d
 `bundle.resources`— así que **verificalo, no lo asumas**:
 
 ```powershell
-7z l ..\target\release\bundle\nsis\MithFlow_1.0.0_x64-setup.exe   # tienen que aparecer 13 .dll
+7z l ..\target\release\bundle\nsis\MithFlow_*_x64-setup.exe   # tienen que aparecer 13 .dll
 ```
 
 La prueba que de verdad cierra el tema es extraer el instalador a un directorio
@@ -71,6 +76,7 @@ npm run dev
 #                                 ?escenario=primer-arranque   (asistente)
 #                                 ?escenario=grabando
 #                                 ?escenario=sin-instalar     (sin uninstall.exe al lado)
+#                                 ?escenario=actualizacion    (hay una versión nueva)
 ```
 
 Desde la consola del navegador, `mithflow.dictar("una frase")` dispara un
