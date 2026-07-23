@@ -61,13 +61,30 @@
 //! El costo es real y está aceptado: ahora un clic sobre la ventanita no llega
 //! a lo que haya debajo. Por eso es chica y por eso se puede mover.
 //!
-//! # Por qué se crea al arrancar y no al apretar la tecla
+//! # Cuándo se crea: perezosa, con un adelanto cuando es seguro
 //!
 //! Crear una ventana con su webview cuesta decenas de milisegundos y hay un
-//! presupuesto de latencia que respetar. Se crea escondida al arrancar la
-//! aplicación, y apretar la tecla no hace más que moverla y mostrarla. Si el
-//! indicador está desactivado en Ajustes **no se crea nada**: ni ventana, ni
-//! eventos, ni medición (ver [`mithflow_core::audio::Medidor::activar`]).
+//! presupuesto de latencia que respetar, así que la idea era crearla escondida
+//! al arrancar y que apretar la tecla no hiciera más que moverla y mostrarla.
+//! Pero crearla en el `setup` de Tauri tiene una trampa: al **arrancar con
+//! Windows** (autostart) ese `setup` corre tempranísimo en el inicio de sesión,
+//! antes de que el shell (`explorer.exe`) y el compositor (DWM) estén listos, y
+//! una ventana `WS_EX_NOACTIVATE` + topmost creada en ese momento queda en un
+//! estado en el que `show()` devuelve `Ok` pero **no pinta**: la ventanita no
+//! aparecía nunca al grabar, aunque el dictado anduviera perfecto.
+//!
+//! Por eso la creación es **perezosa**: la hace [`asegurar`] la primera vez que
+//! de verdad hay que mostrarla, que es cuando el usuario aprieta la tecla para
+//! dictar —necesariamente después de iniciada la sesión y con el escritorio ya
+//! compuesto—. Cuando la app se abre **a mano** (sin `--oculto`) el escritorio
+//! ya está listo, así que se conserva el adelanto: `main` la pre-crea en el
+//! `setup` para que el primer dictado no pague la latencia. El adelanto es sólo
+//! una optimización; la corrección vive en [`asegurar`], que la crea igual si no
+//! estaba, y crearla al primer dictado no le come audio a nadie porque pasa
+//! después de abrir el micrófono (ver `director::Director::publicar`).
+//!
+//! Si el indicador está desactivado en Ajustes **no se crea nada**: ni ventana,
+//! ni eventos, ni medición (ver [`mithflow_core::audio::Medidor::activar`]).
 
 use crate::ajustes;
 use crate::estado::EstadoDto;
@@ -583,7 +600,12 @@ pub fn crear(app: &AppHandle) -> tauri::Result<()> {
     // Acá iba `set_ignore_cursor_events(true)` (`WS_EX_TRANSPARENT`) y ya no
     // va: es lo único que impedía agarrarla para moverla, y no es lo que
     // sostiene la garantía del foco. Ver la nota del módulo.
-    A_LA_VISTA.store(false, Ordering::SeqCst);
+    //
+    // `A_LA_VISTA` NO se toca acá: lo dueña [`reflejar`] (que lo pone antes de
+    // llamar a `asegurar` en la creación perezosa) y [`destruir`]. Reponerlo a
+    // `false` desde acá pisaría el `swap(true)` que `reflejar` acaba de hacer y
+    // dejaría el flag mintiendo. La ventanita nace escondida (`visible(false)`)
+    // y el estático arranca en `false`, así que no hace falta.
     AGARRADA.store(false, Ordering::SeqCst);
     println!("indicador de grabación listo (escondido)");
     Ok(())
@@ -618,41 +640,97 @@ pub fn aplicar_ajuste(app: &AppHandle, activado: bool) {
     }
 }
 
+/// Qué hacer con la ventanita, comparando lo que decía [`A_LA_VISTA`] con lo que
+/// corresponde ahora.
+///
+/// Es la máquina de estados del flag, **pura y aparte** para poder probarla sin
+/// un `AppHandle`: `reflejar` la usa sobre el valor viejo que devuelve el `swap`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Transicion {
+    /// Ya estaba como tiene que estar: no se despacha nada al hilo principal.
+    Ninguna,
+    Mostrar,
+    Esconder,
+}
+
+/// La regla, en un solo lugar: cambió → mostrar u esconder según a dónde va; no
+/// cambió → nada.
+fn transicion(estaba_a_la_vista: bool, debe_verse: bool) -> Transicion {
+    if estaba_a_la_vista == debe_verse {
+        Transicion::Ninguna
+    } else if debe_verse {
+        Transicion::Mostrar
+    } else {
+        Transicion::Esconder
+    }
+}
+
+/// Devuelve la ventanita, **creándola si todavía no existe**.
+///
+/// Ésta es la corrección del bug del arranque con Windows: la ventanita se crea
+/// perezosamente la primera vez que hay que mostrarla, no en el `setup` de
+/// Tauri. En autostart el `setup` corre antes de que el shell y el compositor
+/// (DWM) estén listos, y una ventana `WS_EX_NOACTIVATE` + topmost creada ahí
+/// queda en un estado donde `show()` devuelve `Ok` pero no pinta. Para cuando el
+/// usuario aprieta la tecla para dictar —lo único que lleva a mostrarla— la
+/// sesión ya está iniciada y el escritorio compuesto, así que la ventana nace
+/// sana. Ver la nota del módulo.
+///
+/// `None` sólo si la creación falla de verdad: ahí no hay nada que mostrar y el
+/// dictado sigue igual.
+fn asegurar(app: &AppHandle) -> Option<tauri::WebviewWindow> {
+    if let Some(ventana) = app.get_webview_window(ETIQUETA) {
+        return Some(ventana);
+    }
+    if let Err(e) = crear(app) {
+        eprintln!("no pude crear el indicador de grabación: {e}");
+        return None;
+    }
+    app.get_webview_window(ETIQUETA)
+}
+
 /// Muestra o esconde la ventanita según el estado que se acaba de publicar.
 ///
 /// Se llama en **cada** publicación del director, así que lo primero que hace es
 /// contestar rápido cuando no hay nada que cambiar: mostrar una ventana que ya
 /// está a la vista despacha al hilo principal y espera, y el director publica
 /// también al pausar, al despausar y en cada cambio de estado.
+///
+/// Cuando corresponde mostrarla y la ventanita todavía no existe, la crea
+/// [`asegurar`] en el acto: en el arranque con Windows es la primera vez que se
+/// puede crear sana (ver la nota del módulo).
 pub fn reflejar(app: &AppHandle, dto: &EstadoDto, activado: bool, posicion: &str) {
     let debe_verse = activado && visible_en(dto.estado);
-    if A_LA_VISTA.swap(debe_verse, Ordering::SeqCst) == debe_verse {
-        return;
-    }
-    let Some(ventana) = app.get_webview_window(ETIQUETA) else {
-        // El indicador está activado pero la ventana no existe (falló al
-        // crearse). No hay nada que mostrar y el dictado sigue igual.
-        A_LA_VISTA.store(false, Ordering::SeqCst);
-        return;
-    };
-
-    if !debe_verse {
-        if let Err(e) = ventana.hide() {
-            eprintln!("no pude esconder el indicador: {e}");
+    match transicion(A_LA_VISTA.swap(debe_verse, Ordering::SeqCst), debe_verse) {
+        Transicion::Ninguna => {}
+        Transicion::Esconder => {
+            // La ventana puede no existir todavía —perezosa: nunca se llegó a
+            // mostrar en esta sesión—, y entonces no hay nada que esconder.
+            if let Some(ventana) = app.get_webview_window(ETIQUETA) {
+                if let Err(e) = ventana.hide() {
+                    eprintln!("no pude esconder el indicador: {e}");
+                }
+            }
+            // Recién acá se escribe al disco lo que el usuario haya arrastrado:
+            // el dictado ya terminó y el texto ya se pegó, así que una escritura
+            // de 200 bytes no le cuesta nada a nadie.
+            guardar_lo_arrastrado(app);
         }
-        // Recién acá se escribe al disco lo que el usuario haya arrastrado: el
-        // dictado ya terminó y el texto ya se pegó, así que una escritura de
-        // 200 bytes no le cuesta nada a nadie.
-        guardar_lo_arrastrado(app);
-        return;
-    }
-
-    // La posición se recalcula en cada aparición y no una vez al crearla: el
-    // usuario puede haberse mudado de monitor, o haber enchufado uno nuevo,
-    // desde la grabación anterior.
-    ubicar(app, &ventana, posicion);
-    if let Err(e) = ventana.show() {
-        eprintln!("no pude mostrar el indicador: {e}");
+        Transicion::Mostrar => {
+            let Some(ventana) = asegurar(app) else {
+                // No se pudo crear: el dictado sigue igual. Se rearma el flag
+                // para reintentar en la próxima aparición.
+                A_LA_VISTA.store(false, Ordering::SeqCst);
+                return;
+            };
+            // La posición se recalcula en cada aparición y no una vez al
+            // crearla: el usuario puede haberse mudado de monitor, o haber
+            // enchufado uno nuevo, desde la grabación anterior.
+            ubicar(app, &ventana, posicion);
+            if let Err(e) = ventana.show() {
+                eprintln!("no pude mostrar el indicador: {e}");
+            }
+        }
     }
 }
 
@@ -769,6 +847,52 @@ mod tests {
         for otro in ["listo", "cargando", "error", "sin-modelo"] {
             assert!(!hay_que_medir(otro, true));
         }
+    }
+
+    // ---- La máquina de estados del flag A_LA_VISTA ------------------------
+
+    /// El `swap` de `reflejar` sólo dispara trabajo cuando la visibilidad
+    /// **cambia**: mostrar u esconder despachan al hilo principal y esperan, y
+    /// el director publica también al pausar, al despausar y en cada estado.
+    #[test]
+    fn la_transicion_solo_actua_cuando_la_visibilidad_cambia() {
+        // No cambió: nada que despachar, en los dos sentidos.
+        assert_eq!(transicion(false, false), Transicion::Ninguna);
+        assert_eq!(transicion(true, true), Transicion::Ninguna);
+        // Cambió: mostrar u esconder según a dónde va.
+        assert_eq!(transicion(false, true), Transicion::Mostrar);
+        assert_eq!(transicion(true, false), Transicion::Esconder);
+    }
+
+    /// El recorrido de un dictado, tal cual lo produce el director, no muestra
+    /// ni esconde de más. Es lo que evita que `grabando → transcribiendo` vuelva
+    /// a ubicar y mostrar la ventanita (un salto en pantalla) o que la creación
+    /// perezosa dispare un segundo `show` redundante.
+    ///
+    /// Se simula el `swap`: cada paso compara contra lo que dejó el anterior.
+    #[test]
+    fn un_dictado_entero_muestra_una_vez_y_esconde_una_vez() {
+        // (estaba_a_la_vista, debe_verse) en el orden en que publica el director.
+        let pasos = [
+            (false, true),  // listo → grabando: aparece
+            (true, true),   // grabando → transcribiendo: sigue, sin re-mostrar
+            (true, false),  // transcribiendo → listo: desaparece
+            (false, false), // listo (otra publicación, p. ej. pausa): nada
+        ];
+        let esperado = [
+            Transicion::Mostrar,
+            Transicion::Ninguna,
+            Transicion::Esconder,
+            Transicion::Ninguna,
+        ];
+        let mut estaba = false;
+        for (i, (_, debe)) in pasos.iter().enumerate() {
+            let t = transicion(estaba, *debe);
+            assert_eq!(t, esperado[i], "paso {i}: {estaba} -> {debe}");
+            // Lo que hace el `swap`: el flag queda en el valor nuevo.
+            estaba = *debe;
+        }
+        assert!(!estaba, "al final del dictado la ventanita queda escondida");
     }
 
     // ---- El medidor -------------------------------------------------------

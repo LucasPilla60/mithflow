@@ -2105,3 +2105,104 @@ consulta devuelve 404, se anota y la app funciona igual.
   `ajustes-indicador.png` (con el botón nuevo).
 - **No se arrancó la app** ni se creó nada en GitHub. Las capturas salen del
   backend simulado en el navegador.
+
+## Plan 10 — la ventanita no aparecía en el arranque con Windows (1.1.1, 23/7/2026)
+
+### El síntoma
+
+Con `arranque_con_windows` encendido, la ventanita de grabación **no aparecía
+nunca** al dictar, aunque el dictado funcionara perfecto. Abriendo MithFlow **a
+mano** desde el menú Inicio, en cambio, aparecía siempre. El usuario confirmó las
+dos ramas: cerró la app, la reabrió a mano, y ahí sí apareció.
+
+### La causa
+
+La ventanita se creaba en el `setup` de Tauri (`main.rs`, `aplicar_ajuste`),
+escondida, para adelantar la latencia del primer dictado. Al **arrancar con
+Windows** ese `setup` corre tempranísimo en el inicio de sesión, antes de que el
+shell (`explorer.exe`) y el compositor (DWM) estén listos. Una ventana
+`WS_EX_NOACTIVATE` + topmost creada en ese momento queda en un estado en el que
+`show()` devuelve `Ok` pero **no pinta**. Como la ventana nunca se destruye (se
+esconde entre dictados, no se recrea), ese estado roto se arrastra toda la
+sesión: cada `show()` siguiente “tiene éxito” y sigue sin pintar. Abrir a mano
+—con el escritorio ya compuesto— crea una ventana sana, que es por qué esa rama
+andaba.
+
+El átomo `A_LA_VISTA` no era la causa —se rearma bien en cada `hide`—, pero se
+lo dejó de tocar dentro de `crear`: ahora lo dueñan `reflejar` (el `swap`) y
+`destruir`, así la creación perezosa no pisa el flag que `reflejar` acaba de
+poner.
+
+### El arreglo, y por qué ése
+
+**Creación perezosa** (`superpuesta::asegurar`): la ventanita se crea la primera
+vez que de verdad hay que mostrarla, no en el `setup`. Lo único que lleva a
+mostrarla es apretar la tecla para dictar, que es necesariamente **después** de
+iniciada la sesión y con el escritorio compuesto: la ventana nace sana. Se
+conserva el adelanto donde es seguro: al abrir **a mano** (sin `--oculto`, la
+marca que sólo lleva el acceso directo del autostart) `main` la pre-crea en el
+`setup`, igual que antes. El adelanto es sólo una optimización; la corrección
+vive en `asegurar`, que la crea igual si no estaba.
+
+Por qué no las otras opciones que se barajaron:
+
+- **Recrear si el primer `show` no pinta / forzar el pintado con Win32 crudo.**
+  Detectar “no pintó” es frágil (`show()` devuelve `Ok`) y meter `ShowWindow`/
+  `SetWindowPos` a mano arriesga la garantía sagrada del foco. La perezosa
+  **evita el estado roto de raíz** en vez de intentar repararlo.
+- **Retrasar la creación con un `delay` o esperando un evento de “escritorio
+  listo”.** Un delay fijo es una adivinanza (un login lento con muchos programas
+  de arranque puede tardar más), y no hay un evento de shell-listo expuesto por
+  Tauri. La perezosa se cuelga de un hecho **garantizado**: apretar la tecla
+  implica sesión iniciada.
+
+El costo —crear la ventana en el primer dictado de la sesión— es tolerable y no
+toca el camino cronometrado: pasa en `reflejar`, que `publicar` deja **último** y
+**después** de que el micrófono ya está abierto y capturando (ver
+`Director::empezar_a_grabar`/`publicar`). No se pierde audio; sólo el indicador
+aparece una fracción de segundo más tarde, y una sola vez (después la ventana se
+reusa: se esconde, no se destruye). Como WebView2 ya está inicializado por la
+ventana principal, crear la segunda son decenas de milisegundos, no un arranque
+en frío.
+
+### Qué preserva la garantía del foco
+
+**Nada de cómo se crea o se muestra la ventana cambió**: las opciones del builder
+son idénticas (`focusable(false)` → `WS_EX_NOACTIVATE`, `focused(false)` →
+`SW_SHOWNOACTIVATE` en el primer `show`, nunca `set_focus`, el arrastre por
+`start_dragging`). Sólo cambió **cuándo** se llama a `build()`. El spike
+`spike-superpuesta` mide el comportamiento del foco de **esa configuración**, que
+no se tocó; de hecho el spike crea cada ventana justo antes de mostrarla, que es
+el patrón perezoso. No se corrió en vivo esta vez: mueve el mouse, roba el primer
+plano y hace clics sintéticos, y el usuario estaba dictando; correrlo lo habría
+interrumpido. Se dejó compilando y alineado (se corrigió su `ANCHO` de 176 a 168,
+que decía ser “el tamaño real de producción” y estaba desactualizado).
+
+### Lo que queda pendiente de que el usuario confirme
+
+El escenario del bug **no se puede reproducir sin reiniciar Windows**, y no se
+reinició. El arreglo se valida por diseño: debería andar en autostart porque la
+ventana ya no se crea en ese momento peligroso sino con la sesión iniciada.
+**Queda pendiente que el usuario lo confirme reiniciando** con
+`arranque_con_windows` encendido y dictando. La 1.1.1 le llega sola por el
+actualizador (la 1.1.0 ya lo tiene): es la primera actualización que se
+distribuye así.
+
+### Verificación
+
+- Máquina de estados del flag extraída a una función pura (`transicion`) y
+  probada: sólo actúa cuando la visibilidad cambia, y un dictado entero muestra
+  una vez y esconde una vez (nada de re-mostrar en `grabando → transcribiendo`,
+  ni un segundo `show` por la creación perezosa).
+- `cargo test --workspace`: **102 núcleo + 145 app** (eran 102 y 143; +2 de
+  `transicion`).
+- `cargo clippy --workspace --all-targets -- -D warnings`: limpio.
+- `npm run build`: sin errores de TypeScript.
+- `spike-superpuesta`: **compila**; no se corrió en vivo (ver arriba).
+- **Instalador 1.1.1 firmado**: la versión quedó sincronizada en los tres
+  archivos; el `latest.json` apunta a `LucasPilla60/mithflow`, tag `v1.1.1`, con
+  la firma que coincide con el `.sig`; la clave pública embebida en
+  `tauri.conf.json` coincide con la clave con la que se firmó, así que las
+  instalaciones existentes van a verificar la actualización.
+- **No se arrancó ni se cerró la app** (el usuario la tenía dictando) ni se tocó
+  GitHub.

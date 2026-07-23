@@ -73,8 +73,10 @@ use windows::Win32::UI::WindowsAndMessaging::{
 /// Cuánto se le da a Windows para procesar cada cambio antes de mirar el foco.
 const RESPIRO: Duration = Duration::from_millis(400);
 
-/// El tamaño real de la ventanita de producción, en píxeles lógicos.
-const ANCHO: f64 = 176.0;
+/// El tamaño real de la ventanita de producción, en píxeles lógicos
+/// (`superpuesta::ANCHO`/`ALTO`). El tamaño no cambia el comportamiento del foco
+/// que este spike mide, pero se mantiene alineado para no confundir.
+const ANCHO: f64 = 168.0;
 const ALTO: f64 = 48.0;
 
 // ---------------------------------------------------------------- Win32 crudo

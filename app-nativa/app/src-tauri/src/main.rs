@@ -149,7 +149,11 @@ fn preparar(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         if cfg.sonidos { "sí" } else { "no" }
     );
 
-    if std::env::args().any(|a| a == ARG_OCULTO) {
+    // `--oculto` lo agrega SÓLO el acceso directo del arranque con Windows, así
+    // que también es la señal de que el escritorio puede no estar listo todavía
+    // (ver la pre-creación del indicador más abajo).
+    let arranco_oculto = std::env::args().any(|a| a == ARG_OCULTO);
+    if arranco_oculto {
         if let Some(v) = handle.get_webview_window(ventana::PRINCIPAL) {
             if let Err(e) = v.hide() {
                 eprintln!("no pude arrancar sin ventana: {e}");
@@ -165,12 +169,17 @@ fn preparar(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let (al_director, cola) = mpsc::channel::<Mensaje>();
     bandeja::construir(&handle)?;
 
-    // La ventanita se crea ACÁ, escondida, y no al apretar la tecla: crear una
-    // ventana con su webview cuesta decenas de milisegundos, y el atajo tiene un
-    // presupuesto de latencia que respetar. Después, empezar a grabar no hace
-    // más que moverla y mostrarla. Si el indicador está desactivado no se crea
-    // nada. Que falle no es fatal: se dicta igual, sólo sin indicador.
-    superpuesta::aplicar_ajuste(&handle, cfg.indicador);
+    // La ventanita se pre-crea ACÁ, escondida, **sólo si la app se abrió a
+    // mano** (no por autostart): crearla adelanta la latencia del primer
+    // dictado, pero en el arranque con Windows el escritorio (shell + DWM)
+    // todavía no está listo y la ventana queda en un estado donde `show()` no
+    // pinta. En autostart se difiere: `superpuesta::asegurar` la crea sana la
+    // primera vez que hay que mostrarla, ya con la sesión iniciada. Ver la nota
+    // del módulo `superpuesta`. Que falle no es fatal: se dicta igual, sólo sin
+    // indicador.
+    if cfg.indicador && !arranco_oculto {
+        superpuesta::aplicar_ajuste(&handle, true);
+    }
 
     let espejo = Arc::new(EstadoCompartido::nuevo());
     handle.manage(Arc::clone(&espejo));
