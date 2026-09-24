@@ -325,6 +325,7 @@ export default function Dashboard() {
 function FilaDictado({ dictado }: { dictado: Dictado }) {
   const latencia = dictado.transcribe_s + dictado.cleanup_s;
   const hayCrudo = dictado.raw.trim().length > 0 && dictado.raw !== dictado.final;
+  const hayTexto = dictado.final.trim().length > 0;
 
   return (
     <li>
@@ -334,8 +335,9 @@ function FilaDictado({ dictado }: { dictado: Dictado }) {
         <span>{conDosDecimales(dictado.audio_s)} s de audio</span>
         <span>{conDosDecimales(latencia)} s de latencia</span>
         <span className="etiqueta-modo">{nombreDeModo(dictado.mode)}</span>
+        {hayTexto && <BotonCopiar texto={dictado.final} />}
       </div>
-      {dictado.final.trim() ? (
+      {hayTexto ? (
         <p className="texto seleccionable">{dictado.final}</p>
       ) : (
         <p className="texto ausente">
@@ -349,5 +351,50 @@ function FilaDictado({ dictado }: { dictado: Dictado }) {
         </details>
       )}
     </li>
+  );
+}
+
+/** Cuánto queda a la vista el "Copiado" antes de volver a "Copiar". */
+const AVISO_COPIADO_MS = 1500;
+
+type EstadoCopia = "listo" | "copiado" | "fallo";
+
+const ROTULO_COPIA: Record<EstadoCopia, string> = {
+  listo: "Copiar",
+  copiado: "Copiado",
+  fallo: "No se pudo copiar",
+};
+
+/**
+ * Copia el texto de un dictado al portapapeles. Existe para el caso en que el
+ * pegado automático no encontró un campo con foco: sin esto había que
+ * seleccionar el texto a mano.
+ */
+function BotonCopiar({ texto }: { texto: string }) {
+  const [estado, setEstado] = useState<EstadoCopia>("listo");
+  const reloj = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+
+  useEffect(() => () => clearTimeout(reloj.current), []);
+
+  const copiar = async () => {
+    try {
+      await navigator.clipboard.writeText(texto);
+      setEstado("copiado");
+    } catch {
+      setEstado("fallo");
+    }
+    clearTimeout(reloj.current);
+    reloj.current = setTimeout(() => setEstado("listo"), AVISO_COPIADO_MS);
+  };
+
+  return (
+    <button
+      type="button"
+      className="boton plano chico copiar"
+      aria-label="Copiar el texto del dictado"
+      onClick={copiar}
+    >
+      <span aria-live="polite">{ROTULO_COPIA[estado]}</span>
+    </button>
   );
 }
