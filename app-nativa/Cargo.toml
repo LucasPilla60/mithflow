@@ -14,5 +14,5 @@ exclude = ["spike", "spike-hotkey", "spike-superpuesta"]
 resolver = "2"
 
 [workspace.package]
-version = "1.1.1"
+version = "1.1.2"
 edition = "2021"
