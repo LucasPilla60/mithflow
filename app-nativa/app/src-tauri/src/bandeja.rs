@@ -67,8 +67,8 @@ pub fn construir(app: &AppHandle) -> tauri::Result<()> {
         .show_menu_on_left_click(false)
         .on_menu_event(|app, evento| match evento.id().as_ref() {
             ID_PAUSA => app.state::<AlDirector>().enviar(Mensaje::AlternarPausa),
-            ID_DASHBOARD => ventana::mostrar(app, "dashboard"),
-            ID_AJUSTES => ventana::mostrar(app, "ajustes"),
+            ID_DASHBOARD => ventana::mostrar(app, Some("dashboard")),
+            ID_AJUSTES => ventana::mostrar(app, Some("ajustes")),
             ID_SALIR => app.exit(0),
             // El ítem de estado está deshabilitado, pero el `_` igual hace
             // falta y documenta que no hay nada que hacer con él.
@@ -81,7 +81,7 @@ pub fn construir(app: &AppHandle) -> tauri::Result<()> {
                 ..
             } = evento
             {
-                ventana::mostrar(tray.app_handle(), "dashboard");
+                ventana::mostrar(tray.app_handle(), None);
             }
         })
         .build(app)?;
