@@ -63,9 +63,7 @@ fn main() {
         // la ventana al frente, no enganchar el teclado dos veces (que sería un
         // atajo que arranca y para la grabación de un solo golpe).
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
-            if let Some(v) = app.get_webview_window(ventana::PRINCIPAL) {
-                ventana::enfocar(&v);
-            }
+            ventana::mostrar(app, None);
         }))
         .plugin(tauri_plugin_store::Builder::default().build())
         // Actualizaciones contra GitHub Releases. El endpoint y la clave pública
@@ -200,7 +198,7 @@ fn preparar(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     // Última de todo y en un hilo que primero duerme: si esta línea no existiera
     // la aplicación funcionaría igual, que es exactamente la relación que tiene
     // que tener el actualizador con el dictado.
-    actualizador::consultar_al_arrancar(&handle);
+    actualizador::consultar_periodicamente(&handle);
     director::lanzar(
         handle.clone(),
         al_director,

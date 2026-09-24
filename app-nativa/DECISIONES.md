@@ -2206,3 +2206,70 @@ distribuye así.
   instalaciones existentes van a verificar la actualización.
 - **No se arrancó ni se cerró la app** (el usuario la tenía dictando) ni se tocó
   GitHub.
+
+## Plan 11 — la ventana desaparecía tras actualizar (1.1.3, 24/9/2026)
+
+### El síntoma
+
+Al actualizar de la 1.1.1 a la 1.1.2 desde Ajustes, la app se relanzó y
+**no abría**: ni el ícono de la bandeja ni el acceso directo mostraban nada.
+Dictar sí andaba (la ventanita de grabación apareció al dictar).
+
+### Lo que se midió
+
+- El proceso nuevo corría con `--oculto`. El plugin de actualización
+  (`tauri-plugin-updater` 2.10.1, `updater.rs`, `current_exe_args`) le pasa al
+  instalador **los argumentos del proceso que se está reemplazando**. La
+  instancia anterior había arrancado con Windows, así que la nueva arrancó
+  escondida. Eso es esperable y no es el bug.
+- Enumerando las ventanas del proceso con Win32: **no existía la ventana
+  `main`**, ni siquiera escondida. `get_webview_window("main")` devolvía `None`
+  y `mostrar`/`enfocar` no hacían nada, en silencio.
+- Relanzar a mano con `--oculto` crea `main` bien, escondida (verificado
+  mirando la visibilidad cada 0,5 s durante 8 s). `--oculto` solo no lo
+  explica: lo que falla es algo del relanzamiento que hace el instalador. Una
+  sospecha no confirmada: el WebView2 del proceso anterior todavía se estaba
+  cerrando. Windows no registró errores y la app no guarda log, así que **la
+  causa exacta queda sin confirmar**; reproducirla exige otra actualización.
+
+### El arreglo, y por qué no depende de la causa
+
+`ventana::mostrar`, que es por donde pasan la bandeja y la segunda instancia,
+**recrea `main` desde `tauri.conf.json` si no existe**. Arregla este caso y
+cualquier otro que deje el proceso sin ventana.
+
+- La creación va en un **hilo aparte**: quien llama es un manejador de eventos
+  en el hilo principal, y en Windows `WebviewWindowBuilder::build()` desde ahí
+  se traba para siempre (documentado en `from_config`, wry#583).
+- `RECREANDO` evita que dos clics seguidos lancen dos creaciones (la segunda
+  fallaría por la etiqueta repetida).
+- La sección pedida ("ajustes") no llega a una ventana recién creada, que
+  todavía no escucha: abre en el dashboard. Es un camino de recuperación.
+
+### Dos cosas más que salieron de acá
+
+- **El evento `ir-a` no lo escuchaba nadie.** "Ajustes" desde el menú de la
+  bandeja emitía `ir-a` y el frontend no tenía oyente: abría la ventana en la
+  vista que hubiera quedado. Ahora `App.tsx` lo escucha (`alIrA`) y valida que
+  la sección sea una vista conocida. El clic izquierdo en el ícono pasa a
+  `None` (solo traer al frente), que es lo que hacía de hecho hasta ahora: con
+  el oyente nuevo, pedir "dashboard" sacaría al usuario de Ajustes en cada clic.
+- **Consulta periódica de actualizaciones.** Había una sola consulta, a los 15 s
+  de arrancar. Con la app días en la bandeja, la 1.1.2 no aparecía hasta
+  reiniciar o apretar "Buscar actualizaciones". Ahora se repite cada 6 h en el
+  mismo hilo (`consultar_periodicamente`), así nunca se pisan dos consultas.
+
+### Regla
+
+Una ventana que se busca por etiqueta **puede no existir** aunque la haya
+creado la configuración. Quien la pide para mostrarla tiene que poder
+recrearla, y la recreación nunca va en el hilo de eventos.
+
+### Verificación
+
+- `cargo clippy --workspace --all-targets -- -D warnings`: limpio.
+- `cargo test --workspace`: **102 núcleo + 145 app**, verde.
+- `tsc --noEmit`: sin errores.
+- **No probado en vivo**: el camino de recreación. No hay forma práctica de
+  dejar un proceso sin `main` a propósito; se confirmará en la próxima
+  actualización real (la 1.1.3 le llega a la 1.1.2 por el mismo camino).

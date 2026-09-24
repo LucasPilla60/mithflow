@@ -319,6 +319,10 @@ export const alActualizacionDisponible = (
 ): Promise<UnlistenFn> =>
   listen<EstadoActualizacion>("actualizacion-disponible", (ev) => f(ev.payload));
 
+/** La bandeja pide abrir una sección ("dashboard" o "ajustes"). */
+export const alIrA = (f: (seccion: string) => void): Promise<UnlistenFn> =>
+  listen<{ seccion: string }>("ir-a", (ev) => f(ev.payload.seccion));
+
 /**
  * Cancela un conjunto de suscripciones. `listen` devuelve una promesa, así que
  * hay que esperarla para poder cancelar: soltarla sin esperar deja al oyente

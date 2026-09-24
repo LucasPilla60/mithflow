@@ -15,6 +15,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   alAviso,
   alCambiarEstado,
+  alIrA,
   cancelarTodas,
   leerCatalogo,
   leerEstado,
@@ -32,6 +33,9 @@ import Asistente from "./vistas/Asistente";
 import "./estilos.css";
 
 type Vista = "dashboard" | "ajustes";
+
+const esVista = (seccion: string): seccion is Vista =>
+  seccion === "dashboard" || seccion === "ajustes";
 
 /** Cuánto queda en pantalla un aviso antes de irse solo. */
 const VIDA_DEL_AVISO_MS = 6000;
@@ -80,6 +84,7 @@ export default function App() {
     const suscripciones = [
       alCambiarEstado((e) => montado.current && setEstado(e)),
       alAviso((a) => avisar(a.texto, a.nivel)),
+      alIrA((s) => montado.current && esVista(s) && setVista(s)),
     ];
 
     return () => {

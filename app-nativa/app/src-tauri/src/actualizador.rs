@@ -49,6 +49,10 @@ use tauri_plugin_updater::UpdaterExt;
 /// que puede pelearle la máquina, así que espera a que lo peor haya pasado.
 const ESPERA_AL_ARRANCAR: Duration = Duration::from_secs(15);
 
+/// Cada cuánto se vuelve a consultar con la app abierta. Cuatro consultas por
+/// día a un archivo de GitHub no le cuestan nada a nadie.
+const ENTRE_CONSULTAS: Duration = Duration::from_secs(6 * 60 * 60);
+
 /// Tope de cada petición al endpoint. Sin esto, un servidor que acepta la
 /// conexión y no contesta deja un hilo colgado para siempre.
 const TOPE_DE_CONSULTA: Duration = Duration::from_secs(15);
@@ -351,20 +355,27 @@ fn publicar(app: &AppHandle, resultado: EstadoActualizacion) {
     eventos::actualizacion_disponible(app, resultado);
 }
 
-/// Programa la única consulta automática: una, al arrancar, en un hilo aparte.
+/// Programa las consultas automáticas en un hilo aparte: una al arrancar y
+/// después una cada [`ENTRE_CONSULTAS`].
+///
+/// La repetición existe porque esta app pasa días abierta en la bandeja: con
+/// una sola consulta al arrancar, una versión publicada después no se veía
+/// hasta reiniciar Windows. Las consultas van en fila en el mismo hilo, así que
+/// nunca se pisan dos.
 ///
 /// Que falle crear el hilo no puede tumbar nada: se anota y la aplicación
 /// arranca sin consulta automática. El botón de Ajustes sigue estando.
-pub fn consultar_al_arrancar(app: &AppHandle) {
+pub fn consultar_periodicamente(app: &AppHandle) {
     let app = app.clone();
     let creado = std::thread::Builder::new()
         .name("mithflow-actualizacion".into())
         .spawn(move || {
             std::thread::sleep(ESPERA_AL_ARRANCAR);
-            tauri::async_runtime::spawn(async move {
-                let resultado = consultar(&app).await;
+            loop {
+                let resultado = tauri::async_runtime::block_on(consultar(&app));
                 publicar(&app, resultado);
-            });
+                std::thread::sleep(ENTRE_CONSULTAS);
+            }
         });
     if let Err(e) = creado {
         eprintln!("no pude programar la consulta de actualizaciones: {e}");
